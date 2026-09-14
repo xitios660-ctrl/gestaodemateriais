@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ArrowLeft, UploadCloud, Loader2, Clock, CheckCircle2, Copy, FileText, X } from "lucide-react";
+import { ArrowLeft, UploadCloud, Loader2, Clock, CheckCircle2, Copy, FileText, X, Download, FileSpreadsheet } from "lucide-react";
 
 export default function TicketForm() {
   const { categoryId } = useParams();
@@ -39,6 +39,20 @@ export default function TicketForm() {
   }, [categoryId]);
 
   const setValue = (id, v) => setValues((p) => ({ ...p, [id]: v }));
+
+  const downloadTemplate = async () => {
+    try {
+      const resp = await api.get(`/categories/${category.id}/template`, { responseType: "blob" });
+      const url = URL.createObjectURL(resp.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = category.template_filename || `modelo-${category.name}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Falha ao baixar o modelo");
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -267,6 +281,26 @@ export default function TicketForm() {
                   )}
                 </div>
               ))}
+
+              {(category.template_columns || []).length > 0 && (
+                <div data-testid="template-download-box" className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                  <p className="text-sm font-semibold text-amber-800 flex items-center gap-2">
+                    <FileSpreadsheet className="w-4 h-4" /> Modelo padrão obrigatório
+                  </p>
+                  <p className="text-xs text-amber-700 mt-1 leading-relaxed">
+                    Baixe a planilha modelo, preencha as colunas (<strong>{category.template_columns.join(", ")}</strong>) e anexe o arquivo preenchido abaixo.
+                  </p>
+                  <Button
+                    type="button"
+                    data-testid="download-template-button"
+                    onClick={downloadTemplate}
+                    variant="outline"
+                    className="mt-3 border-amber-300 text-amber-800 hover:bg-amber-100 gap-2 h-9"
+                  >
+                    <Download className="w-4 h-4" /> Baixar modelo Excel
+                  </Button>
+                </div>
+              )}
 
               <div>
                 <Label className="text-slate-700">Anexo (opcional)</Label>

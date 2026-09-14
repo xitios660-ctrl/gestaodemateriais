@@ -27,7 +27,7 @@ const FIELD_TYPES = [
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-const EMPTY = { name: "", icon: "Laptop", description: "", lead_time_hours: 24, owners: [], fields: [], active: true };
+const EMPTY = { name: "", icon: "Laptop", description: "", lead_time_hours: 24, owners: [], fields: [], template_columns: [], template_filename: "", active: true };
 
 export default function CategoryManager({ categories, onChange }) {
   const [editing, setEditing] = useState(null);
@@ -42,7 +42,10 @@ export default function CategoryManager({ categories, onChange }) {
     setForm({
       name: c.name, icon: c.icon, description: c.description,
       lead_time_hours: c.lead_time_hours, owners: [...(c.owners || [])],
-      fields: (c.fields || []).map((f) => ({ ...f, id: f.id || uid() })), active: c.active !== false,
+      fields: (c.fields || []).map((f) => ({ ...f, id: f.id || uid() })),
+      template_columns: [...(c.template_columns || [])],
+      template_filename: c.template_filename || "",
+      active: c.active !== false,
     });
     setOwnerInput("");
   };
@@ -70,6 +73,7 @@ export default function CategoryManager({ categories, onChange }) {
       const payload = {
         ...form,
         lead_time_hours: Number(form.lead_time_hours) || 24,
+        template_columns: (form.template_columns || []).filter(Boolean),
         fields: form.fields.map((f) => ({
           ...f,
           options: f.type === "select" ? f.options.filter(Boolean) : [],
@@ -206,6 +210,20 @@ export default function CategoryManager({ categories, onChange }) {
                   </span>
                 ))}
               </div>
+            </div>
+
+            <div>
+              <Label>Modelo Excel — colunas (separadas por vírgula)</Label>
+              <Input
+                data-testid="template-columns-input"
+                value={(form.template_columns || []).join(", ")}
+                onChange={(e) => setForm({ ...form, template_columns: e.target.value.split(",").map((s) => s.trim()) })}
+                placeholder="Ex: Endereço físico, CNPJ, Inscrição Estadual"
+                className="mt-1.5"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Se preenchido, o solicitante poderá baixar uma planilha modelo com essas colunas para preencher e anexar.
+              </p>
             </div>
 
             <div>

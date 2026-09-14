@@ -16,8 +16,11 @@ from typing import List, Optional, Annotated
 from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urlparse
+from io import BytesIO
 
 import bcrypt
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
 import jwt
 import httpx
 import requests
@@ -339,6 +342,8 @@ class CategoryInput(BaseModel):
     lead_time_hours: int = 24
     owners: List[str] = []
     fields: List[CustomField] = []
+    template_columns: List[str] = []
+    template_filename: Optional[str] = None
     active: bool = True
 
 
@@ -443,6 +448,32 @@ async def get_category(cat_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
     return ser_category(doc)
+
+
+@api_router.get("/categories/{cat_id}/template")
+async def category_template(cat_id: str):
+    doc = await db.categories.find_one({"_id": ObjectId(cat_id)})
+    cols = (doc or {}).get("template_columns") or []
+    if not doc or not cols:
+        raise HTTPException(status_code=404, detail="Modelo não disponível")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Modelo"
+    ws.append(cols)
+    for i, _ in enumerate(cols, 1):
+        cell = ws.cell(row=1, column=i)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="660099")
+        ws.column_dimensions[cell.column_letter].width = 30
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = doc.get("template_filename") or "modelo.xlsx"
+    return StarletteResponse(
+        content=buf.read(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @api_router.post("/categories")
@@ -685,6 +716,8 @@ DEFAULT_CATEGORIES = [
         "name": "Criação de Centros", "icon": "Building2",
         "description": "Abertura de novos centros de custo, unidades operacionais ou projetos",
         "lead_time_hours": 48, "owners": ["matheus.cardosooliveira1@gmail.com"], "active": True,
+        "template_columns": ["Endereço físico", "CNPJ", "Inscrição Estadual"],
+        "template_filename": "modelo-criacao-centros.xlsx",
         "fields": [
             {"id": str(uuid.uuid4()), "label": "Nome do centro", "type": "text", "required": True, "options": []},
             {"id": str(uuid.uuid4()), "label": "Tipo de centro", "type": "select", "required": True,
