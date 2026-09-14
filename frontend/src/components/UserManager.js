@@ -1,24 +1,31 @@
 import { useState, useEffect, useCallback } from "react";
 import { api, formatApiErrorDetail } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import { CategoryIcon } from "@/lib/ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, Loader2, UserCircle, Mail, ShieldCheck } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, UserCircle, Mail, ShieldCheck, Layers } from "lucide-react";
 
-const EMPTY = { name: "", email: "", password: "", role: "admin" };
+const EMPTY = { name: "", email: "", password: "", role: "responsavel", categories: [], send_welcome: true };
+
+const ROLE_LABELS = { admin: "Administrador (acesso total)", responsavel: "Responsável (por categoria)" };
 
 export default function UserManager() {
   const { user: current } = useAuth();
   const [users, setUsers] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState(null); // "new" | id
+  const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -26,8 +33,12 @@ export default function UserManager() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await api.get("/users");
-      setUsers(data);
+      const [u, c] = await Promise.all([
+        api.get("/users"),
+        api.get("/categories", { params: { all: true } }),
+      ]);
+      setUsers(u.data);
+      setCategories(c.data);
     } finally {
       setLoading(false);
     }
@@ -35,19 +46,33 @@ export default function UserManager() {
 
   useEffect(() => { load(); }, [load]);
 
+  const catName = (id) => categories.find((c) => c.id === id)?.name || id;
+
   const openNew = () => { setEditing("new"); setForm(EMPTY); };
-  const openEdit = (u) => { setEditing(u.id); setForm({ name: u.name, email: u.email, password: "", role: u.role }); };
+  const openEdit = (u) =>
+    setEditing(u.id) || setForm({ name: u.name, email: u.email, password: "", role: u.role, categories: [...(u.categories || [])], send_welcome: false });
+
+  const toggleCat = (id) =>
+    setForm((f) => ({ ...f, categories: f.categories.includes(id) ? f.categories.filter((x) => x !== id) : [...f.categories, id] }));
 
   const save = async () => {
     if (!form.name.trim()) { toast.error("Informe o nome"); return; }
     if (editing === "new" && !form.email.trim()) { toast.error("Informe o e-mail"); return; }
+    if (editing === "new" && !form.send_welcome && form.password.length < 6) {
+      toast.error("Defina uma senha (mín. 6) ou ative o e-mail de boas-vindas");
+      return;
+    }
     setSaving(true);
     try {
       if (editing === "new") {
-        await api.post("/users", { name: form.name, email: form.email, password: form.password, role: form.role });
-        toast.success("Responsável cadastrado");
+        await api.post("/users", {
+          name: form.name, email: form.email, password: form.password || null,
+          role: form.role, categories: form.role === "responsavel" ? form.categories : [],
+          send_welcome: form.send_welcome,
+        });
+        toast.success(form.send_welcome ? "Responsável cadastrado — e-mail de boas-vindas enviado" : "Responsável cadastrado");
       } else {
-        const payload = { name: form.name, role: form.role };
+        const payload = { name: form.name, role: form.role, categories: form.role === "responsavel" ? form.categories : [] };
         if (form.password) payload.password = form.password;
         await api.put(`/users/${editing}`, payload);
         toast.success("Usuário atualizado");
@@ -98,7 +123,22 @@ export default function UserManager() {
                     {current?.id === u.id && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">você</span>}
                   </div>
                   <p className="text-sm text-slate-500 truncate flex items-center gap-1.5 mt-0.5"><Mail className="w-3.5 h-3.5" /> {u.email}</p>
-                  <p className="text-xs text-slate-400 flex items-center gap-1 mt-1"><ShieldCheck className="w-3.5 h-3.5" /> {u.role}</p>
+                  <p className="text-xs text-slate-400 flex items-center gap-1 mt-1">
+                    <ShieldCheck className="w-3.5 h-3.5" /> {u.role === "admin" ? "Administrador" : "Responsável"}
+                  </p>
+                  {u.role === "responsavel" && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {(u.categories || []).length === 0 ? (
+                        <span className="text-xs text-rose-500">Nenhuma categoria atribuída</span>
+                      ) : (
+                        (u.categories || []).map((cid) => (
+                          <span key={cid} className="inline-flex items-center gap-1 text-[11px] bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full">
+                            <Layers className="w-3 h-3" /> {catName(cid)}
+                          </span>
+                        ))
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="flex gap-2 mt-4">
@@ -117,7 +157,7 @@ export default function UserManager() {
       )}
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editing === "new" ? "Novo Responsável" : "Editar Usuário"}</DialogTitle>
           </DialogHeader>
@@ -139,17 +179,53 @@ export default function UserManager() {
               />
               {editing !== "new" && <p className="text-xs text-slate-400 mt-1">O e-mail não pode ser alterado.</p>}
             </div>
+
             <div>
-              <Label>{editing === "new" ? "Senha" : "Nova senha (opcional)"}</Label>
+              <Label>Perfil de acesso</Label>
+              <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v })}>
+                <SelectTrigger data-testid="user-role-select" className="mt-1.5"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="responsavel">{ROLE_LABELS.responsavel}</SelectItem>
+                  <SelectItem value="admin">{ROLE_LABELS.admin}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {form.role === "responsavel" && (
+              <div>
+                <Label>Categorias que este responsável pode ver</Label>
+                <div className="mt-2 space-y-2 max-h-40 overflow-y-auto rounded-xl border border-slate-100 p-3 bg-slate-50">
+                  {categories.length === 0 && <p className="text-sm text-slate-400">Nenhuma categoria cadastrada.</p>}
+                  {categories.map((c) => (
+                    <label key={c.id} data-testid={`user-cat-${c.id}`} className="flex items-center gap-2.5 cursor-pointer">
+                      <Checkbox checked={form.categories.includes(c.id)} onCheckedChange={() => toggleCat(c.id)} />
+                      <span className="inline-flex items-center gap-1.5 text-sm text-slate-700">
+                        <CategoryIcon name={c.icon} className="w-4 h-4 text-purple-500" /> {c.name}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <Label>{editing === "new" ? "Senha inicial (opcional)" : "Nova senha (opcional)"}</Label>
               <Input
                 data-testid="user-password-input"
                 type="password"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
                 className="mt-1.5"
-                placeholder={editing === "new" ? "Mínimo 6 caracteres" : "Deixe em branco para manter"}
+                placeholder={editing === "new" ? "Deixe em branco para enviar por e-mail" : "Deixe em branco para manter"}
               />
             </div>
+
+            {editing === "new" && (
+              <label className="flex items-center gap-3 cursor-pointer bg-purple-50 rounded-xl p-3 border border-purple-100">
+                <Switch data-testid="user-welcome-switch" checked={form.send_welcome} onCheckedChange={(v) => setForm({ ...form, send_welcome: v })} />
+                <span className="text-sm text-slate-700">Enviar e-mail de boas-vindas com link para o responsável definir a senha</span>
+              </label>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)}>Cancelar</Button>

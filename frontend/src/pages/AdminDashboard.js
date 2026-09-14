@@ -124,20 +124,24 @@ export default function AdminDashboard() {
           >
             <Ticket className="w-4 h-4" /> Chamados
           </button>
-          <button
-            data-testid="tab-categories"
-            onClick={() => setTab("categories")}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${tab === "categories" ? "bg-[#660099] text-white shadow-lg shadow-purple-500/25" : "bg-white text-slate-600 border border-purple-100 hover:bg-purple-50"}`}
-          >
-            <LayoutGrid className="w-4 h-4" /> Categorias
-          </button>
-          <button
-            data-testid="tab-users"
-            onClick={() => setTab("users")}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${tab === "users" ? "bg-[#660099] text-white shadow-lg shadow-purple-500/25" : "bg-white text-slate-600 border border-purple-100 hover:bg-purple-50"}`}
-          >
-            <Users className="w-4 h-4" /> Usuários
-          </button>
+          {user?.role === "admin" && (
+            <>
+              <button
+                data-testid="tab-categories"
+                onClick={() => setTab("categories")}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${tab === "categories" ? "bg-[#660099] text-white shadow-lg shadow-purple-500/25" : "bg-white text-slate-600 border border-purple-100 hover:bg-purple-50"}`}
+              >
+                <LayoutGrid className="w-4 h-4" /> Categorias
+              </button>
+              <button
+                data-testid="tab-users"
+                onClick={() => setTab("users")}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${tab === "users" ? "bg-[#660099] text-white shadow-lg shadow-purple-500/25" : "bg-white text-slate-600 border border-purple-100 hover:bg-purple-50"}`}
+              >
+                <Users className="w-4 h-4" /> Usuários
+              </button>
+            </>
+          )}
         </div>
 
         {tab === "tickets" && (
@@ -336,7 +340,7 @@ export default function AdminDashboard() {
                     {(selected.history || []).map((h, i) => (
                       <div key={i} className="flex items-center gap-2 text-sm text-slate-600">
                         <span className={`w-2 h-2 rounded-full ${STATUS_STYLES[h.status]?.split(" ")[0] || "bg-slate-300"}`} />
-                        {STATUS_LABELS[h.status]} — <span className="text-slate-400 text-xs">{fmt(h.at)}</span>
+                        {STATUS_LABELS[h.status]} <span className="text-slate-400 text-xs">— {fmt(h.at)}{h.by ? ` · por ${h.by}` : ""}</span>
                       </div>
                     ))}
                   </div>

@@ -7,7 +7,7 @@ export function SiteHeader() {
   return (
     <header className="sticky top-0 z-40 w-full bg-white/80 backdrop-blur-xl border-b border-purple-100">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-        <Link to="/" data-testid="brand-logo" className="flex items-center gap-2.5 group">
+        <Link to="/admin" data-testid="brand-logo" title="Painel administrativo" className="flex items-center gap-2.5 group">
           <img src="/vivo-logo.jpeg" alt="Vivo" className="w-9 h-9 rounded-xl object-cover shadow-lg shadow-purple-500/25 group-hover:scale-105 transition-transform" />
           <div className="leading-tight">
             <p className="font-display font-extrabold text-slate-900 text-base">Gestão de Materiais</p>

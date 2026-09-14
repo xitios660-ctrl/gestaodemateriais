@@ -154,6 +154,19 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Token inválido")
 
 
+async def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Acesso restrito a administradores")
+    return user
+
+
+def scope_match(user: dict) -> dict:
+    """Empty for admins; category filter for scoped responsáveis."""
+    if user.get("role") == "admin":
+        return {}
+    return {"category_id": {"$in": user.get("categories", []) or []}}
+
+
 # ----------------------------------------------------------------------------
 # Object storage helpers
 # ----------------------------------------------------------------------------
@@ -350,6 +363,33 @@ async def send_password_reset_email(to_email: str, token: str) -> bool:
         return False
 
 
+async def send_welcome_email(to_email: str, name: str, token: str) -> bool:
+    base = FRONTEND_URL.rstrip("/")
+    link = f"{base}/reset-password?token={token}"
+    if not EMAIL_KEY or EMAIL_KEY.startswith("{") or not base.startswith("https://"):
+        logger.warning("Welcome email not sent (config); set-password link: %s", link)
+        return False
+    brand = escape(EMAIL_FROM_NAME)
+    html = (
+        f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif;max-width:520px">'
+        f'<h2 style="color:#660099;margin:0 0 16px">Bem-vindo(a) à {brand}</h2>'
+        f'<p style="color:#475569">Olá {escape(name)}, foi criada uma conta de acesso ao painel <strong>{brand}</strong>.</p>'
+        f'<p style="color:#475569">Seu login (e-mail de acesso): <strong>{escape(to_email)}</strong></p>'
+        f'<p style="color:#475569">Para começar, defina a sua senha de acesso:</p>'
+        f'<p style="margin:20px 0"><a href="{escape(link)}" style="background:#660099;color:#fff;padding:12px 24px;'
+        f'border-radius:8px;text-decoration:none;display:inline-block">Definir minha senha</a></p>'
+        f'<p style="color:#475569">Este link expira em 48 horas e só pode ser usado uma vez.</p>'
+        f'<p style="font-size:12px;color:#94a3b8;margin-top:24px">Enviado por {brand}. Nunca pedimos sua senha por e-mail.</p>'
+        f'</td></tr></table>'
+    )
+    try:
+        eid = await send_email(to_email, f"Acesso ao painel {EMAIL_FROM_NAME}", html)
+        return bool(eid)
+    except Exception as e:
+        logger.error(f"Welcome email failed: {e}")
+        return False
+
+
 # ----------------------------------------------------------------------------
 # Pydantic models
 # ----------------------------------------------------------------------------
@@ -370,14 +410,17 @@ class ResetInput(BaseModel):
 class UserCreate(BaseModel):
     name: str
     email: EmailStr
-    password: str
-    role: str = "admin"
+    password: Optional[str] = None
+    role: str = "responsavel"
+    categories: List[str] = []
+    send_welcome: bool = True
 
 
 class UserUpdate(BaseModel):
     name: Optional[str] = None
     role: Optional[str] = None
     password: Optional[str] = None
+    categories: Optional[List[str]] = None
 
 
 class CustomField(BaseModel):
@@ -427,6 +470,7 @@ def ser_user(doc: dict) -> dict:
         "name": doc.get("name", ""),
         "email": doc.get("email", ""),
         "role": doc.get("role", "admin"),
+        "categories": doc.get("categories", []),
         "created_at": doc.get("created_at"),
     }
 
@@ -475,38 +519,55 @@ async def me(user: dict = Depends(get_current_user)):
 
 
 @api_router.get("/users")
-async def list_users(user: dict = Depends(get_current_user)):
+async def list_users(user: dict = Depends(require_admin)):
     docs = await db.users.find().sort("created_at", 1).to_list(500)
     return [ser_user(d) for d in docs]
 
 
 @api_router.post("/users")
-async def create_user(payload: UserCreate, user: dict = Depends(get_current_user)):
+async def create_user(payload: UserCreate, background_tasks: BackgroundTasks, user: dict = Depends(require_admin)):
     email = payload.email.lower().strip()
-    if len(payload.password) < 6:
-        raise HTTPException(status_code=400, detail="A senha deve ter ao menos 6 caracteres")
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="E-mail já cadastrado")
+    if payload.password:
+        if len(payload.password) < 6:
+            raise HTTPException(status_code=400, detail="A senha deve ter ao menos 6 caracteres")
+        pw_hash = hash_password(payload.password)
+    else:
+        pw_hash = hash_password(secrets.token_urlsafe(16))
+    role = payload.role if payload.role in ("admin", "responsavel") else "responsavel"
     doc = {
-        "email": email, "password_hash": hash_password(payload.password),
-        "name": payload.name.strip() or "Responsável", "role": payload.role or "admin",
+        "email": email, "password_hash": pw_hash,
+        "name": payload.name.strip() or "Responsável", "role": role,
+        "categories": payload.categories or [],
         "token_version": 0, "created_at": datetime.now(timezone.utc).isoformat(),
     }
     res = await db.users.insert_one(doc)
     doc["_id"] = res.inserted_id
+    if payload.send_welcome:
+        token = secrets.token_urlsafe(32)
+        await db.password_reset_tokens.insert_one({
+            "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+            "user_id": str(res.inserted_id), "email": email,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(),
+            "used": False, "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        background_tasks.add_task(send_welcome_email, email, doc["name"], token)
     return ser_user(doc)
 
 
 @api_router.put("/users/{uid}")
-async def update_user(uid: str, payload: UserUpdate, user: dict = Depends(get_current_user)):
+async def update_user(uid: str, payload: UserUpdate, user: dict = Depends(require_admin)):
     target = await db.users.find_one({"_id": ObjectId(uid)})
     if not target:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
     updates = {}
     if payload.name is not None:
         updates["name"] = payload.name.strip()
-    if payload.role is not None:
+    if payload.role is not None and payload.role in ("admin", "responsavel"):
         updates["role"] = payload.role
+    if payload.categories is not None:
+        updates["categories"] = payload.categories
     inc = {}
     if payload.password:
         if len(payload.password) < 6:
@@ -525,7 +586,7 @@ async def update_user(uid: str, payload: UserUpdate, user: dict = Depends(get_cu
 
 
 @api_router.delete("/users/{uid}")
-async def delete_user(uid: str, user: dict = Depends(get_current_user)):
+async def delete_user(uid: str, user: dict = Depends(require_admin)):
     if str(user["_id"]) == uid:
         raise HTTPException(status_code=400, detail="Você não pode remover seu próprio usuário")
     if await db.users.count_documents({}) <= 1:
@@ -646,7 +707,7 @@ async def category_template(cat_id: str):
 
 
 @api_router.post("/categories")
-async def create_category(payload: CategoryInput, user: dict = Depends(get_current_user)):
+async def create_category(payload: CategoryInput, user: dict = Depends(require_admin)):
     doc = payload.model_dump()
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
     res = await db.categories.insert_one(doc)
@@ -655,7 +716,7 @@ async def create_category(payload: CategoryInput, user: dict = Depends(get_curre
 
 
 @api_router.put("/categories/{cat_id}")
-async def update_category(cat_id: str, payload: CategoryInput, user: dict = Depends(get_current_user)):
+async def update_category(cat_id: str, payload: CategoryInput, user: dict = Depends(require_admin)):
     doc = payload.model_dump()
     res = await db.categories.update_one({"_id": ObjectId(cat_id)}, {"$set": doc})
     if res.matched_count == 0:
@@ -665,7 +726,7 @@ async def update_category(cat_id: str, payload: CategoryInput, user: dict = Depe
 
 
 @api_router.delete("/categories/{cat_id}")
-async def delete_category(cat_id: str, user: dict = Depends(get_current_user)):
+async def delete_category(cat_id: str, user: dict = Depends(require_admin)):
     await db.categories.delete_one({"_id": ObjectId(cat_id)})
     return {"message": "Categoria removida"}
 
@@ -781,6 +842,12 @@ async def list_tickets(status: Optional[str] = None, category_id: Optional[str] 
             {"requester.matricula": {"$regex": s, "$options": "i"}},
             {"requester.empresa": {"$regex": s, "$options": "i"}},
         ]
+    if user.get("role") != "admin":
+        cats = user.get("categories", []) or []
+        if category_id and category_id != "all" and category_id in cats:
+            query["category_id"] = category_id
+        else:
+            query["category_id"] = {"$in": cats}
     docs = await db.tickets.find(query).sort("created_at", -1).to_list(1000)
     return [ser_ticket(d) for d in docs]
 
@@ -790,6 +857,8 @@ async def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
     doc = await db.tickets.find_one({"_id": ObjectId(ticket_id)})
     if not doc:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    if user.get("role") != "admin" and doc.get("category_id") not in (user.get("categories") or []):
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
     return ser_ticket(doc)
 
 
@@ -797,13 +866,17 @@ async def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
 async def update_status(ticket_id: str, payload: StatusUpdate, user: dict = Depends(get_current_user)):
     if payload.status not in STATUS_LABELS:
         raise HTTPException(status_code=400, detail="Status inválido")
+    doc = await db.tickets.find_one({"_id": ObjectId(ticket_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    if user.get("role") != "admin" and doc.get("category_id") not in (user.get("categories") or []):
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
     now = datetime.now(timezone.utc).isoformat()
-    entry = {"status": payload.status, "at": now, "note": payload.note or ""}
-    res = await db.tickets.update_one(
+    actor = user.get("name") or user.get("email")
+    entry = {"status": payload.status, "at": now, "note": payload.note or "", "by": actor}
+    await db.tickets.update_one(
         {"_id": ObjectId(ticket_id)},
         {"$set": {"status": payload.status}, "$push": {"history": entry}})
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Chamado não encontrado")
     doc = await db.tickets.find_one({"_id": ObjectId(ticket_id)})
     return ser_ticket(doc)
 
@@ -812,6 +885,8 @@ async def update_status(ticket_id: str, payload: StatusUpdate, user: dict = Depe
 async def download_file(path: str, user: dict = Depends(get_current_user)):
     record = await db.tickets.find_one({"file.storage_path": path})
     if not record:
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+    if user.get("role") != "admin" and record.get("category_id") not in (user.get("categories") or []):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     data, content_type = get_object(path)
     fname = record["file"].get("original_filename", "arquivo")
@@ -824,14 +899,17 @@ async def download_file(path: str, user: dict = Depends(get_current_user)):
 # ----------------------------------------------------------------------------
 @api_router.get("/admin/stats")
 async def admin_stats(user: dict = Depends(get_current_user)):
-    total = await db.tickets.count_documents({})
-    open_count = await db.tickets.count_documents({"status": {"$in": ["aberto", "em_analise", "em_andamento"]}})
-    done = await db.tickets.count_documents({"status": "concluido"})
+    match = scope_match(user)
+    total = await db.tickets.count_documents(match)
+    open_count = await db.tickets.count_documents({**match, "status": {"$in": ["aberto", "em_analise", "em_andamento"]}})
+    done = await db.tickets.count_documents({**match, "status": "concluido"})
     by_cat = await db.tickets.aggregate([
+        {"$match": match},
         {"$group": {"_id": "$category_name", "count": {"$sum": 1}}},
         {"$sort": {"count": -1}}
     ]).to_list(20)
     by_status = await db.tickets.aggregate([
+        {"$match": match},
         {"$group": {"_id": "$status", "count": {"$sum": 1}}}
     ]).to_list(20)
     return {
