@@ -1,0 +1,185 @@
+{
+  "project_name": "Portal de Atendimento e Chamados - Help Desk PT-BR",
+  "theme": "Purple Modern Clean (Púrpura Elegante)",
+  "language": "pt-BR",
+  "app_type": "hybrid_fullstack",
+  "file_format": "JavaScript (.js / .jsx)",
+  "typography": {
+    "font_family_heading": "Plus Jakarta Sans, sans-serif",
+    "font_family_body": "Inter, sans-serif",
+    "font_family_mono": "JetBrains Mono, monospace",
+    "google_fonts_url": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap",
+    "hierarchy": {
+      "h1_hero": "text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-tight",
+      "h2_section": "text-2xl sm:text-3xl font-bold tracking-tight text-slate-900 dark:text-white",
+      "h3_card": "text-lg sm:text-xl font-semibold text-slate-900 dark:text-slate-100",
+      "body_base": "text-base text-slate-600 dark:text-slate-300 leading-relaxed",
+      "body_small": "text-sm text-slate-500 dark:text-slate-400",
+      "label_uppercase": "text-xs font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400"
+    }
+  },
+  "colors": {
+    "primary": {
+      "main": "#7c3aed",
+      "hover": "#6d28d9",
+      "active": "#5b21b6",
+      "light": "#f5f3ff",
+      "border": "#ddd6fe",
+      "glow": "rgba(124, 58, 237, 0.15)"
+    },
+    "secondary": {
+      "main": "#a855f7",
+      "light": "#faf5ff"
+    },
+    "neutral": {
+      "bg_light": "#f8fafc",
+      "surface_light": "#ffffff",
+      "border_light": "#e2e8f0",
+      "text_title": "#0f172a",
+      "text_body": "#475569",
+      "text_muted": "#64748b",
+      "bg_dark": "#0f172a",
+      "surface_dark": "#1e1b4b",
+      "border_dark": "#312e81"
+    },
+    "status": {
+      "pending_bg": "#fef3c7",
+      "pending_text": "#b45309",
+      "in_progress_bg": "#f3e8ff",
+      "in_progress_text": "#6d28d9",
+      "completed_bg": "#d1fae5",
+      "completed_text": "#047857",
+      "cancelled_bg": "#ffe4e6",
+      "cancelled_text": "#be123c"
+    }
+  },
+  "layout_and_spacing": {
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "bento_grid": "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8",
+    "card_padding": "p-6 sm:p-8",
+    "section_spacing": "py-12 sm:py-16 lg:py-20",
+    "border_radius": "rounded-2xl for cards/modals, rounded-xl for inputs/buttons, rounded-full for status badges"
+  },
+  "visual_enhancers": {
+    "glassmorphism": "bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border border-purple-100 dark:border-purple-900/30 shadow-sm",
+    "purple_glow_card": "relative overflow-hidden bg-white dark:bg-slate-900 border border-purple-100 dark:border-purple-900/40 rounded-2xl p-6 hover:shadow-xl hover:shadow-purple-500/10 hover:border-purple-300 transition-all duration-300",
+    "badge": "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold tracking-wide",
+    "file_dropzone": "border-2 border-dashed border-purple-200 dark:border-purple-800 hover:border-purple-500 bg-purple-50/50 dark:bg-purple-950/20 rounded-xl p-8 text-center transition-colors cursor-pointer"
+  },
+  "key_views_and_components": {
+    "public_portal": {
+      "header": "Clean sticky nav with Brand Logo 'Central de Serviços', Quick Search 'Consultar Chamado', Language indicator (PT-BR), and 'Acesso Restrito / Admin' button",
+      "hero_section": "Friendly welcoming header 'Como podemos ajudar você hoje?', subtitle 'Selecione uma categoria para abrir um novo chamado de forma simples e rápida.'",
+      "category_cards": [
+        {
+          "id": "informatica",
+          "title": "Informática & TI",
+          "description": "Suporte a computadores, periféricos, softwares, rede e sistemas de TI",
+          "icon": "Laptop",
+          "badge": "Lead time médio: 4h"
+        },
+        {
+          "id": "acessos",
+          "title": "Acessos e Permissões",
+          "description": "Criação, alteração ou revogação de acessos a sistemas e pastas compartilhadas",
+          "icon": "KeyRound",
+          "badge": "Lead time médio: 8h"
+        },
+        {
+          "id": "ferias",
+          "title": "Férias e RH",
+          "description": "Solicitação de agendamento, alteração ou dúvidas sobre férias e benefícios",
+          "icon": "CalendarCheck",
+          "badge": "Lead time médio: 24h"
+        },
+        {
+          "id": "criacao_centros",
+          "title": "Criação de Centros",
+          "description": "Abertura de novos centros de custo, unidades operacionais ou projetos",
+          "icon": "Building2",
+          "badge": "Lead time médio: 48h"
+        },
+        {
+          "id": "reabastecimento",
+          "title": "Reabastecimento",
+          "description": "Solicitação de materiais de escritório, insumos de copa e suprimentos",
+          "icon": "PackagePlus",
+          "badge": "Lead time médio: 12h"
+        }
+      ]
+    },
+    "dynamic_ticket_form": {
+      "requester_section": "Identificação do Solicitante (Matrícula, E-mail Corporativo, Empresa/Departamento)",
+      "category_specific_fields": "Formulário condicional carregado dinamicamente com base nos campos cadastrados na categoria",
+      "file_upload": "Área de upload de arquivos padrão (drag & drop) com suporte a anexos (PDF, PNG, JPG, DOCX até 10MB)",
+      "submission_button": "Botão de envio proeminente em roxo púrpura (#7c3aed) 'Enviar Chamado'"
+    },
+    "success_modal": {
+      "elements": [
+        "Ícone de confirmação animado (Check em círculo roxo/verde)",
+        "Número do chamado gerado com destaque (#CH-2026-XXXX)",
+        "Lead time / Prazo de Atendimento estimado (ex: 24 horas úteis)",
+        "Aviso de notificação por e-mail para os responsáveis cadastrados",
+        "Botão 'Copiar Código' e 'Abrir Novo Chamado' ou 'Acompanhar Status'"
+      ]
+    },
+    "ticket_tracker": {
+      "elements": [
+        "Campo de busca rápida por número do chamado ou e-mail/matrícula",
+        "Card de status em tempo real com timeline de progresso (Aberto -> Em Análise -> Em Andamento -> Concluído)"
+      ]
+    },
+    "admin_section": {
+      "login_modal": "Autenticação rápida para gestores/owners com chave secreta ou usuário/senha admin",
+      "dashboard_overview": "Métricas KPI (Total Chamados, Abertos, Prazo Médio/SLA, Categorias mais acionadas)",
+      "ticket_management_table": "Tabela interativa com busca, filtros por categoria, status e ordenação por data",
+      "ticket_detail_drawer": "Visualização do chamado completo com alteração de status, histórico de envios para e-mails dos owners e download do arquivo anexado",
+      "category_manager": "Painel de CRUD de categorias: Nome, Ícone, Descrição, Prazo/Lead Time (horas/dias), E-mails dos Responsáveis (Owners), e Construtor de Campos Personalizados (Campo Texto, Seleção, Arquivo, Data, Checkbox)"
+    }
+  },
+  "testing_attributes": {
+    "rule": "TODOS os elementos interativos e de exibição de dados devam conter obrigatoriamente o atributo data-testid em formato kebab-case.",
+    "examples": [
+      "data-testid='category-card-informatica'",
+      "data-testid='category-card-acessos'",
+      "data-testid='requester-matricula-input'",
+      "data-testid='requester-email-input'",
+      "data-testid='requester-empresa-input'",
+      "data-testid='ticket-file-upload-zone'",
+      "data-testid='submit-ticket-button'",
+      "data-testid='ticket-success-number'",
+      "data-testid='ticket-success-lead-time'",
+      "data-testid='ticket-tracker-input'",
+      "data-testid='ticket-tracker-search-button'",
+      "data-testid='admin-login-button'",
+      "data-testid='admin-tickets-table'",
+      "data-testid='admin-category-create-button'",
+      "data-testid='admin-save-category-button'"
+    ]
+  },
+  "image_urls": [
+    {
+      "category": "user_avatar_1",
+      "url": "https://images.unsplash.com/photo-1600878459138-e1123b37cb30?crop=entropy&cs=srgb&fm=jpg&ixid=M3w8NjA3MDB8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBwZXJzb24lMjBhdmF0YXIlMjBwb3J0cmFpdHxlbnwwfHx8fDE3ODkzNTQyNTB8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Avatar do administrador principal do sistema"
+    },
+    {
+      "category": "user_avatar_2",
+      "url": "https://images.unsplash.com/photo-1713947507130-227586ab3024?crop=entropy&cs=srgb&fm=jpg&ixid=M3w8NjA3MDB8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBwZXJzb24lMjBhdmF0YXIlMjBwb3J0cmFpdHxlbnwwfHx8fDE3ODkzNTQyNTB8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Avatar do agente de suporte de TI"
+    },
+    {
+      "category": "workspace_hero_bg",
+      "url": "https://images.unsplash.com/photo-1609915189900-455ffd52e50f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w8NTYxNzV8MHwxfHNlYXJjaHwzfHxtb2Rlcm4lMjB0ZWNoJTIwb2ZmaWNlJTIwd29ya3NwYWNlJTIwTWluaW1hbGlzdHxlbnwwfHx8fDE3ODkzNTQyNDd8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Imagem de fundo limpa para o portal de suporte corporativo"
+    }
+  ],
+  "instructions_to_main_agent": [
+    "Usar sempre componentes Shadcn customizados com Tailwind no arquivo de estilo JS.",
+    "Garantir suporte a idioma Português do Brasil (PT-BR) em todas as labels, botões, modais e notificações.",
+    "Utilizar Lucide-React para os ícones das categorias (Laptop, KeyRound, CalendarCheck, Building2, PackagePlus, Plus, Trash, Edit, CheckCircle2, Clock, UploadCloud, Search, ShieldCheck).",
+    "Implementar feedback de toast usando 'sonner' para criação de chamados, salvamento de categorias e login admin.",
+    "Fornecer dados mockados pré-carregados nas categorias (Informática, Acessos, Férias, Criação de Centros, Reabastecimento) para demonstrar a aplicação imediatamente.",
+    "Sempre incluir o atributo data-testid em todos os campos de formulário, botões de ação e tabelas do painel admin."
+  ]
+}
