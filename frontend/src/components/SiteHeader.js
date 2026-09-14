@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
-import { LifeBuoy, Search, ShieldCheck } from "lucide-react";
+import { LifeBuoy, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export function SiteHeader() {
@@ -23,15 +23,6 @@ export function SiteHeader() {
           >
             <Search className="w-4 h-4" />
             <span className="hidden sm:inline">Consultar Chamado</span>
-          </Button>
-          <Button
-            variant="outline"
-            data-testid="nav-admin-button"
-            onClick={() => navigate("/admin/login")}
-            className="border-purple-200 text-purple-700 hover:bg-purple-50 gap-2"
-          >
-            <ShieldCheck className="w-4 h-4" />
-            <span className="hidden sm:inline">Acesso Admin</span>
           </Button>
         </div>
       </div>

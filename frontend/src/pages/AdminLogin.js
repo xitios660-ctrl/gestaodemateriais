@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { formatApiErrorDetail } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -84,6 +84,16 @@ export default function AdminLogin() {
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
             Entrar
           </Button>
+
+          <div className="text-center pt-1">
+            <Link
+              to="/admin/forgot"
+              data-testid="forgot-password-link"
+              className="text-sm text-[#660099] hover:underline"
+            >
+              Esqueci a senha
+            </Link>
+          </div>
         </form>
       </div>
     </div>

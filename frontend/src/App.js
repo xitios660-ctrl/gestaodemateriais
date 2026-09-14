@@ -6,6 +6,8 @@ import Portal from "@/pages/Portal";
 import TicketForm from "@/pages/TicketForm";
 import Tracker from "@/pages/Tracker";
 import AdminLogin from "@/pages/AdminLogin";
+import ForgotPassword from "@/pages/ForgotPassword";
+import ResetPassword from "@/pages/ResetPassword";
 import AdminDashboard from "@/pages/AdminDashboard";
 import { Loader2 } from "lucide-react";
 
@@ -33,6 +35,8 @@ function App() {
             <Route path="/abrir/:categoryId" element={<TicketForm />} />
             <Route path="/acompanhar" element={<Tracker />} />
             <Route path="/admin/login" element={<AdminLogin />} />
+            <Route path="/admin/forgot" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
             <Route
               path="/admin"
               element={

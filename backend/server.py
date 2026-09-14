@@ -9,6 +9,8 @@ import logging
 import uuid
 import json
 import random
+import secrets
+import hashlib
 import ipaddress
 import re
 from datetime import datetime, timezone, timedelta
@@ -319,11 +321,49 @@ async def notify_owners(ticket: dict, owners: List[str]):
                                 {"$set": {"email_log": log}})
 
 
+async def send_password_reset_email(to_email: str, token: str) -> bool:
+    base = FRONTEND_URL.rstrip("/")
+    link = f"{base}/reset-password?token={token}"
+    if not EMAIL_KEY or EMAIL_KEY.startswith("{") or not base.startswith("https://"):
+        if urlparse(base).hostname in ("localhost", "127.0.0.1", "::1"):
+            logger.warning("Email not configured; reset link: %s", link)
+        else:
+            logger.error("Reset email not configured (EMERGENT_EMAIL_KEY / FRONTEND_URL)")
+        return False
+    brand = escape(EMAIL_FROM_NAME)
+    html = (
+        f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif;max-width:520px">'
+        f'<h2 style="color:#660099;margin:0 0 16px">Redefinição de senha</h2>'
+        f'<p style="color:#475569">Recebemos uma solicitação para redefinir a senha do painel <strong>{brand}</strong>.</p>'
+        f'<p style="margin:20px 0"><a href="{escape(link)}" style="background:#660099;color:#fff;padding:12px 24px;'
+        f'border-radius:8px;text-decoration:none;display:inline-block">Redefinir senha</a></p>'
+        f'<p style="color:#475569">Este link expira em 1 hora e só pode ser usado uma vez. Se você não '
+        f'solicitou, ignore este e-mail — sua senha permanece inalterada.</p>'
+        f'<p style="font-size:12px;color:#94a3b8;margin-top:24px">Enviado por {brand}. Nunca pedimos sua senha por e-mail.</p>'
+        f'</td></tr></table>'
+    )
+    try:
+        eid = await send_email(to_email, f"Redefinição de senha - {EMAIL_FROM_NAME}", html)
+        return bool(eid)
+    except Exception as e:
+        logger.error(f"Reset email failed: {e}")
+        return False
+
+
 # ----------------------------------------------------------------------------
 # Pydantic models
 # ----------------------------------------------------------------------------
 class LoginInput(BaseModel):
     email: EmailStr
+    password: str
+
+
+class ForgotInput(BaseModel):
+    email: EmailStr
+
+
+class ResetInput(BaseModel):
+    token: str
     password: str
 
 
@@ -430,6 +470,52 @@ async def refresh(request: Request, response: Response):
         return {"message": "ok"}
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Token inválido")
+
+
+GENERIC_RESET_MSG = {"message": "Se este e-mail estiver cadastrado, enviaremos um link de redefinição."}
+
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(payload: ForgotInput, background_tasks: BackgroundTasks):
+    email = payload.email.lower().strip()
+    now = datetime.now(timezone.utc)
+    await db.password_reset_requests.insert_one({"email": email, "created_at": now.isoformat()})
+    window = (now - timedelta(minutes=15)).isoformat()
+    recent = await db.password_reset_requests.count_documents(
+        {"email": email, "created_at": {"$gt": window}})
+    if recent > 5:
+        return GENERIC_RESET_MSG
+    user = await db.users.find_one({"email": email})
+    if not user:
+        return GENERIC_RESET_MSG
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    await db.password_reset_tokens.insert_one({
+        "token_hash": token_hash, "user_id": str(user["_id"]), "email": email,
+        "expires_at": (now + timedelta(hours=1)).isoformat(), "used": False,
+        "created_at": now.isoformat(),
+    })
+    background_tasks.add_task(send_password_reset_email, user["email"], token)
+    return GENERIC_RESET_MSG
+
+
+@api_router.post("/auth/reset-password")
+async def reset_password(payload: ResetInput):
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="A senha deve ter ao menos 6 caracteres")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    h = hashlib.sha256(payload.token.encode()).hexdigest()
+    doc = await db.password_reset_tokens.find_one_and_update(
+        {"token_hash": h, "used": False, "expires_at": {"$gt": now_iso}},
+        {"$set": {"used": True}})
+    if not doc:
+        raise HTTPException(status_code=400, detail="Link inválido, expirado ou já utilizado")
+    await db.users.update_one(
+        {"_id": ObjectId(doc["user_id"])},
+        {"$set": {"password_hash": hash_password(payload.password)}, "$inc": {"token_version": 1}})
+    await db.password_reset_tokens.delete_many({"user_id": doc["user_id"], "used": False})
+    await db.login_attempts.delete_many({"email": doc["email"]})
+    return {"message": "Senha redefinida com sucesso"}
 
 
 # ----------------------------------------------------------------------------
@@ -771,6 +857,9 @@ async def startup():
     await db.users.create_index("email", unique=True)
     await db.login_attempts.create_index("identifier")
     await db.tickets.create_index("ticket_number", unique=True)
+    await db.password_reset_tokens.create_index("token_hash", unique=True)
+    await db.password_reset_tokens.create_index("email")
+    await db.password_reset_requests.create_index("email")
     await seed_admin()
     await seed_categories()
     try:
