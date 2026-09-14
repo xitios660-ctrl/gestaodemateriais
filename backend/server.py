@@ -367,6 +367,19 @@ class ResetInput(BaseModel):
     password: str
 
 
+class UserCreate(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+    role: str = "admin"
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    password: Optional[str] = None
+
+
 class CustomField(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     label: str
@@ -406,6 +419,16 @@ def ser_ticket(doc: dict) -> dict:
     doc["id"] = str(doc.pop("_id"))
     doc["status_label"] = STATUS_LABELS.get(doc.get("status"), doc.get("status"))
     return doc
+
+
+def ser_user(doc: dict) -> dict:
+    return {
+        "id": str(doc["_id"]),
+        "name": doc.get("name", ""),
+        "email": doc.get("email", ""),
+        "role": doc.get("role", "admin"),
+        "created_at": doc.get("created_at"),
+    }
 
 
 # ----------------------------------------------------------------------------
@@ -449,6 +472,66 @@ async def logout(response: Response):
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     return {"id": user["_id"], "email": user["email"], "name": user.get("name", "Admin"), "role": user.get("role", "admin")}
+
+
+@api_router.get("/users")
+async def list_users(user: dict = Depends(get_current_user)):
+    docs = await db.users.find().sort("created_at", 1).to_list(500)
+    return [ser_user(d) for d in docs]
+
+
+@api_router.post("/users")
+async def create_user(payload: UserCreate, user: dict = Depends(get_current_user)):
+    email = payload.email.lower().strip()
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="A senha deve ter ao menos 6 caracteres")
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="E-mail já cadastrado")
+    doc = {
+        "email": email, "password_hash": hash_password(payload.password),
+        "name": payload.name.strip() or "Responsável", "role": payload.role or "admin",
+        "token_version": 0, "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    res = await db.users.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return ser_user(doc)
+
+
+@api_router.put("/users/{uid}")
+async def update_user(uid: str, payload: UserUpdate, user: dict = Depends(get_current_user)):
+    target = await db.users.find_one({"_id": ObjectId(uid)})
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+    updates = {}
+    if payload.name is not None:
+        updates["name"] = payload.name.strip()
+    if payload.role is not None:
+        updates["role"] = payload.role
+    inc = {}
+    if payload.password:
+        if len(payload.password) < 6:
+            raise HTTPException(status_code=400, detail="A senha deve ter ao menos 6 caracteres")
+        updates["password_hash"] = hash_password(payload.password)
+        inc["token_version"] = 1
+    if updates or inc:
+        op = {}
+        if updates:
+            op["$set"] = updates
+        if inc:
+            op["$inc"] = inc
+        await db.users.update_one({"_id": ObjectId(uid)}, op)
+    updated = await db.users.find_one({"_id": ObjectId(uid)})
+    return ser_user(updated)
+
+
+@api_router.delete("/users/{uid}")
+async def delete_user(uid: str, user: dict = Depends(get_current_user)):
+    if str(user["_id"]) == uid:
+        raise HTTPException(status_code=400, detail="Você não pode remover seu próprio usuário")
+    if await db.users.count_documents({}) <= 1:
+        raise HTTPException(status_code=400, detail="Deve existir ao menos um usuário")
+    await db.users.delete_one({"_id": ObjectId(uid)})
+    return {"message": "Usuário removido"}
 
 
 @api_router.post("/auth/refresh")

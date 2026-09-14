@@ -4,6 +4,7 @@ import { api, API, formatApiErrorDetail } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { CategoryIcon, STATUS_STYLES, STATUS_LABELS } from "@/lib/ui";
 import CategoryManager from "@/components/CategoryManager";
+import UserManager from "@/components/UserManager";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -11,7 +12,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { toast } from "sonner";
 import {
   LifeBuoy, LogOut, LayoutGrid, Ticket, Search, Loader2, Clock,
-  CheckCircle2, Inbox, TrendingUp, Download, Mail, Paperclip,
+  CheckCircle2, Inbox, TrendingUp, Download, Mail, Paperclip, Users,
 } from "lucide-react";
 
 function fmt(dt) {
@@ -130,6 +131,13 @@ export default function AdminDashboard() {
           >
             <LayoutGrid className="w-4 h-4" /> Categorias
           </button>
+          <button
+            data-testid="tab-users"
+            onClick={() => setTab("users")}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${tab === "users" ? "bg-[#660099] text-white shadow-lg shadow-purple-500/25" : "bg-white text-slate-600 border border-purple-100 hover:bg-purple-50"}`}
+          >
+            <Users className="w-4 h-4" /> Usuários
+          </button>
         </div>
 
         {tab === "tickets" && (
@@ -234,6 +242,8 @@ export default function AdminDashboard() {
         {tab === "categories" && (
           <CategoryManager categories={categories} onChange={() => { loadAux(); }} />
         )}
+
+        {tab === "users" && <UserManager />}
       </div>
 
       <Sheet open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
