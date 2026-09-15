@@ -119,7 +119,7 @@ function InsightBars({ title, subtitle, items, getLabel }) {
   );
 }
 
-function RecentActivity({ items = [] }) {
+function RecentActivity({ items = [], onSelect }) {
   return (
     <motion.div variants={fadeUp} className="premium-card p-5">
       <div className="mb-4">
@@ -134,10 +134,7 @@ function RecentActivity({ items = [] }) {
             <button
               type="button"
               key={item.id}
-              onClick={() => {
-                const match = document.querySelector(`[data-ticket-id="${item.id}"]`);
-                match?.click();
-              }}
+              onClick={() => onSelect?.(item)}
               className="w-full flex items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-purple-50/70 transition-colors"
             >
               <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
@@ -435,7 +432,14 @@ export default function AdminDashboard() {
                     items={stats.by_category || []}
                     getLabel={(item) => item.name || "Sem categoria"}
                   />
-                  <RecentActivity items={stats.recent || []} />
+                  <RecentActivity
+                    items={stats.recent || []}
+                    onSelect={(item) => {
+                      const loaded = tickets.find((ticket) => ticket.id === item.id);
+                      if (loaded) setSelected(loaded);
+                      else updateFilter({ search: item.ticket_number });
+                    }}
+                  />
                 </motion.div>
               )}
 
