@@ -76,6 +76,7 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD") or ""
 SMTP_FROM_EMAIL = (os.environ.get("SMTP_FROM_EMAIL") or SMTP_USERNAME).strip()
 SMTP_STARTTLS = (os.environ.get("SMTP_STARTTLS") or "true").strip().lower() in ("1", "true", "yes")
 DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
+PRIMARY_NOTIFICATION_EMAIL = (os.environ.get("PRIMARY_NOTIFICATION_EMAIL") or DEFAULT_OWNER_EMAIL).strip().lower()
 DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
 
 STATUS_LABELS = {
@@ -1162,7 +1163,7 @@ async def create_ticket(
     res = await db.tickets.insert_one(ticket)
     ticket["_id"] = res.inserted_id
 
-    owners = list(dict.fromkeys([*(category.get("owners", []) or []), *DEFAULT_OWNERS]))
+    owners = list(dict.fromkeys([email for email in [PRIMARY_NOTIFICATION_EMAIL, *(category.get("owners", []) or []), *DEFAULT_OWNERS] if email]))
     if owners:
         background_tasks.add_task(notify_owners, dict(ticket), owners)
 
