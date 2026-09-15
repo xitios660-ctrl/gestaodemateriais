@@ -28,6 +28,7 @@ import httpx
 import requests
 from fastapi import FastAPI, APIRouter, Request, Response, HTTPException, Depends, UploadFile, File, Form, BackgroundTasks
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import Response as StarletteResponse, FileResponse, JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict, EmailStr
@@ -1310,6 +1311,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 
 FRONTEND_BUILD_DIR = (ROOT_DIR.parent / "frontend" / "build").resolve()
 
@@ -1318,8 +1320,17 @@ if FRONTEND_BUILD_DIR.exists():
     async def serve_spa(full_path: str):
         requested = (FRONTEND_BUILD_DIR / full_path).resolve()
         if FRONTEND_BUILD_DIR in requested.parents and requested.is_file():
-            return FileResponse(requested)
-        return FileResponse(FRONTEND_BUILD_DIR / "index.html")
+            response = FileResponse(requested)
+            if "/static/" in requested.as_posix():
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            elif requested.name == "index.html":
+                response.headers["Cache-Control"] = "no-cache"
+            else:
+                response.headers["Cache-Control"] = "public, max-age=3600"
+            return response
+        response = FileResponse(FRONTEND_BUILD_DIR / "index.html")
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 @app.on_event("shutdown")
