@@ -80,6 +80,7 @@ BREVO_SENDER_EMAIL = (os.environ.get("BREVO_SENDER_EMAIL") or "").strip().lower(
 BREVO_SENDER_NAME = (os.environ.get("BREVO_SENDER_NAME") or EMAIL_FROM_NAME).strip()
 EMAIL_STATUS_SELF_TEST_TICKET_ID = (os.environ.get("EMAIL_STATUS_SELF_TEST_TICKET_ID") or "").strip()
 BREVO_WEBHOOK_SECRET = (os.environ.get("BREVO_WEBHOOK_SECRET") or "").strip()
+BREVO_CREATE_WEBHOOK_ONCE = (os.environ.get("BREVO_CREATE_WEBHOOK_ONCE") or "").strip().lower() in ("1", "true", "yes")
 DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
 PRIMARY_NOTIFICATION_EMAIL = (os.environ.get("PRIMARY_NOTIFICATION_EMAIL") or DEFAULT_OWNER_EMAIL).strip().lower()
 DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
@@ -560,44 +561,44 @@ async def notify_owners(ticket: dict, owners: List[str]):
 
 
 async def ensure_brevo_webhook() -> None:
-    if not BREVO_API_KEY or not BREVO_WEBHOOK_SECRET:
+    if not BREVO_CREATE_WEBHOOK_ONCE or not BREVO_API_KEY or not BREVO_WEBHOOK_SECRET:
         return
     base = FRONTEND_URL.rstrip("/")
     if not base.startswith("https://"):
         return
     webhook_url = f"{base}/api/email/brevo-webhook"
-    headers = {"api-key": BREVO_API_KEY, "accept": "application/json"}
+    payload = {
+        "url": webhook_url,
+        "description": "Gestão de Materiais - status de entrega",
+        "events": [
+            "request", "delivered", "hardBounce", "softBounce",
+            "blocked", "invalid", "deferred", "spam"
+        ],
+        "type": "transactional",
+        "headers": [
+            {"key": "x-brevo-webhook-secret", "value": BREVO_WEBHOOK_SECRET}
+        ],
+    }
     try:
         async with httpx.AsyncClient(timeout=30) as client_http:
-            existing = await client_http.get(
-                "https://api.brevo.com/v3/webhooks",
-                headers=headers,
-                params={"type": "transactional", "sort": "desc"},
-            )
-            existing.raise_for_status()
-            hooks = existing.json().get("webhooks", [])
-            if any(hook.get("url") == webhook_url for hook in hooks):
-                logger.info("Brevo delivery webhook already configured")
-                return
-            payload = {
-                "url": webhook_url,
-                "description": "Gestão de Materiais - status de entrega",
-                "events": [
-                    "request", "delivered", "hardBounce", "softBounce",
-                    "blocked", "invalid", "deferred", "spam"
-                ],
-                "type": "transactional",
-                "headers": [
-                    {"key": "x-brevo-webhook-secret", "value": BREVO_WEBHOOK_SECRET}
-                ],
-            }
             created = await client_http.post(
                 "https://api.brevo.com/v3/webhooks",
-                headers={**headers, "content-type": "application/json"},
+                headers={
+                    "api-key": BREVO_API_KEY,
+                    "accept": "application/json",
+                    "content-type": "application/json",
+                },
                 json=payload,
             )
-            created.raise_for_status()
-            logger.info("Brevo delivery webhook configured")
+        if created.status_code >= 400:
+            logger.error(
+                "Brevo webhook create failed: HTTP %s %s",
+                created.status_code,
+                created.text[:300],
+            )
+            return
+        webhook_id = created.json().get("id")
+        logger.info("Brevo delivery webhook configured id=%s", webhook_id or "unknown")
     except Exception as exc:
         logger.error("Brevo webhook setup error: %s: %s", type(exc).__name__, str(exc)[:240])
 
