@@ -48,7 +48,7 @@ app = FastAPI(title="Gestão de Materiais API", version="1.0.0")
 api_router = APIRouter(prefix="/api")
 
 JWT_ALGORITHM = "HS256"
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+FRONTEND_URL = (os.environ.get("FRONTEND_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "http://localhost:3000").rstrip("/")
 LOCAL_STORAGE_DIR = Path(os.environ.get("STORAGE_DIR", ROOT_DIR / "uploads"))
 LOCAL_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
