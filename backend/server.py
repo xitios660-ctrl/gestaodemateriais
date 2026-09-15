@@ -561,6 +561,30 @@ async def notify_owners(ticket: dict, owners: List[str]):
                                 {"$set": {"email_log": log}})
 
 
+async def log_brevo_senders() -> None:
+    if not BREVO_API_KEY or not BREVO_DIAGNOSTIC_EMAIL:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=30) as client_http:
+            resp = await client_http.get(
+                "https://api.brevo.com/v3/senders",
+                headers={"api-key": BREVO_API_KEY, "accept": "application/json"},
+            )
+        if resp.status_code >= 400:
+            logger.error("Brevo sender diagnostic failed: HTTP %s %s", resp.status_code, resp.text[:300])
+            return
+        senders = resp.json().get("senders", [])
+        logger.info("Brevo sender diagnostic count=%s", len(senders))
+        for sender in senders[:20]:
+            logger.info(
+                "Brevo sender email=%s active=%s",
+                str(sender.get("email") or "").strip().lower(),
+                sender.get("active"),
+            )
+    except Exception as exc:
+        logger.error("Brevo sender diagnostic error: %s: %s", type(exc).__name__, str(exc)[:240])
+
+
 async def log_brevo_email_diagnostics() -> None:
     if not BREVO_API_KEY or not BREVO_DIAGNOSTIC_EMAIL:
         return
@@ -1917,6 +1941,7 @@ async def startup():
     logger.info("Email delivery configured: %s", "yes" if email_delivery_configured() else "no")
     await ensure_brevo_webhook()
     await log_brevo_email_diagnostics()
+    await log_brevo_senders()
     if EMAIL_STATUS_SELF_TEST_TICKET_ID and ObjectId.is_valid(EMAIL_STATUS_SELF_TEST_TICKET_ID):
         test_oid = ObjectId(EMAIL_STATUS_SELF_TEST_TICKET_ID)
         test_ticket = await db.tickets.find_one({
