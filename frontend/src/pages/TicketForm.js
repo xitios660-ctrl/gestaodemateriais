@@ -128,7 +128,13 @@ export default function TicketForm() {
       if (missing) next[`field.${field.id}`] = "Este campo é obrigatório";
     }
     setErrors(next);
-    return Object.keys(next).length === 0;
+    const valid = Object.keys(next).length === 0;
+    if (!valid) {
+      requestAnimationFrame(() => {
+        document.querySelector('[aria-invalid="true"]')?.focus();
+      });
+    }
+    return valid;
   };
 
   const downloadTemplate = async () => {
@@ -142,6 +148,24 @@ export default function TicketForm() {
       URL.revokeObjectURL(url);
     } catch {
       toast.error("Não foi possível baixar o modelo");
+    }
+  };
+
+  const copyTicketCode = async () => {
+    try {
+      await navigator.clipboard.writeText(success.ticket_number);
+      toast.success("Código copiado");
+    } catch {
+      const input = document.createElement("textarea");
+      input.value = success.ticket_number;
+      input.setAttribute("readonly", "");
+      input.style.position = "fixed";
+      input.style.opacity = "0";
+      document.body.appendChild(input);
+      input.select();
+      const copied = document.execCommand("copy");
+      document.body.removeChild(input);
+      copied ? toast.success("Código copiado") : toast.error("Não foi possível copiar o código");
     }
   };
 
@@ -242,10 +266,7 @@ export default function TicketForm() {
               <Button
                 variant="outline"
                 data-testid="copy-ticket-button"
-                onClick={() => {
-                  navigator.clipboard.writeText(success.ticket_number);
-                  toast.success("Código copiado");
-                }}
+                onClick={copyTicketCode}
                 className="flex-1 border-purple-200 text-purple-700 hover:bg-purple-50 gap-2"
               >
                 <Copy className="w-4 h-4" /> Copiar código
@@ -305,6 +326,7 @@ export default function TicketForm() {
                     id="requester-matricula"
                     data-testid="requester-matricula-input"
                     value={requester.matricula}
+                    maxLength={80}
                     onChange={(e) => setRequesterValue("matricula", e.target.value)}
                     placeholder="Ex: 001234"
                     aria-invalid={!!errors["requester.matricula"]}
@@ -319,6 +341,7 @@ export default function TicketForm() {
                     id="requester-empresa"
                     data-testid="requester-empresa-input"
                     value={requester.empresa}
+                    maxLength={160}
                     onChange={(e) => setRequesterValue("empresa", e.target.value)}
                     placeholder="Ex: Matriz - Financeiro"
                     aria-invalid={!!errors["requester.empresa"]}
@@ -335,6 +358,7 @@ export default function TicketForm() {
                     type="email"
                     autoComplete="email"
                     value={requester.email}
+                    maxLength={254}
                     onChange={(e) => setRequesterValue("email", e.target.value)}
                     placeholder="voce@empresa.com.br"
                     aria-invalid={!!errors["requester.email"]}
@@ -363,10 +387,10 @@ export default function TicketForm() {
                         <Label className="text-slate-700">{f.label} {f.required && <span className="text-rose-500">*</span>}</Label>
                       )}
 
-                      {f.type === "text" && <Input data-testid={`field-${f.id}`} value={values[f.id] || ""} onChange={(e) => setValue(f.id, e.target.value)} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`} />}
+                      {f.type === "text" && <Input data-testid={`field-${f.id}`} maxLength={10000} value={values[f.id] || ""} onChange={(e) => setValue(f.id, e.target.value)} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`} />}
                       {f.type === "number" && <Input data-testid={`field-${f.id}`} type="number" value={values[f.id] || ""} onChange={(e) => setValue(f.id, e.target.value)} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`} />}
                       {f.type === "date" && <Input data-testid={`field-${f.id}`} type="date" value={values[f.id] || ""} onChange={(e) => setValue(f.id, e.target.value)} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`} />}
-                      {f.type === "textarea" && <Textarea data-testid={`field-${f.id}`} value={values[f.id] || ""} onChange={(e) => setValue(f.id, e.target.value)} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`} rows={4} />}
+                      {f.type === "textarea" && <Textarea data-testid={`field-${f.id}`} maxLength={10000} value={values[f.id] || ""} onChange={(e) => setValue(f.id, e.target.value)} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`} rows={4} />}
                       {f.type === "select" && (
                         <Select value={values[f.id] || ""} onValueChange={(v) => setValue(f.id, v)}>
                           <SelectTrigger data-testid={`field-${f.id}`} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`}>
