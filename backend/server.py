@@ -767,10 +767,22 @@ async def reset_password(payload: ResetInput):
 async def list_categories(request: Request, all: bool = False):
     if all:
         user = await get_current_user(request)
-        if user.get("role") != "admin":
-            raise HTTPException(status_code=403, detail="Acesso restrito a administradores")
-        docs = await db.categories.find({}).sort("created_at", 1).to_list(200)
-        return [ser_category(d) for d in docs]
+        if user.get("role") == "admin":
+            docs = await db.categories.find({}).sort("created_at", 1).to_list(200)
+            return [ser_category(d) for d in docs]
+
+        assigned_ids = [
+            ObjectId(value)
+            for value in (user.get("categories") or [])
+            if ObjectId.is_valid(str(value))
+        ]
+        if not assigned_ids:
+            return []
+        docs = await db.categories.find({
+            "_id": {"$in": assigned_ids},
+            "active": True,
+        }).sort("created_at", 1).to_list(200)
+        return [ser_category_public(d) for d in docs]
 
     docs = await db.categories.find({"active": True}).sort("created_at", 1).to_list(200)
     return [ser_category_public(d) for d in docs]
