@@ -15,6 +15,10 @@ import secrets
 import hashlib
 import ipaddress
 import re
+import smtplib
+import ssl
+from email.message import EmailMessage
+from email.utils import formataddr
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated, Literal
 from html import escape
@@ -65,6 +69,12 @@ storage_key = None
 EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME") or "Central de Serviços"
+SMTP_HOST = (os.environ.get("SMTP_HOST") or "").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT") or "587")
+SMTP_USERNAME = (os.environ.get("SMTP_USERNAME") or "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD") or ""
+SMTP_FROM_EMAIL = (os.environ.get("SMTP_FROM_EMAIL") or SMTP_USERNAME).strip()
+SMTP_STARTTLS = (os.environ.get("SMTP_STARTTLS") or "true").strip().lower() in ("1", "true", "yes")
 DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
 DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
 
@@ -423,21 +433,62 @@ def _assert_safe_email(subject: str, html: str) -> None:
                 raise ValueError(f"Anchor text mismatch (G3)")
 
 
+def email_delivery_configured() -> bool:
+    emergent_ready = bool(EMAIL_KEY and not EMAIL_KEY.startswith("{"))
+    smtp_ready = bool(SMTP_HOST and SMTP_FROM_EMAIL and SMTP_USERNAME and SMTP_PASSWORD)
+    return emergent_ready or smtp_ready
+
+
+def _smtp_send(to: str, subject: str, html: str) -> str:
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = formataddr((EMAIL_FROM_NAME, SMTP_FROM_EMAIL))
+    message["To"] = to
+    message.set_content("Este e-mail contém conteúdo em HTML. Abra-o em um cliente compatível.")
+    message.add_alternative(html, subtype="html")
+
+    context = ssl.create_default_context()
+    if SMTP_PORT == 465:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=25, context=context) as smtp:
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.send_message(message)
+    else:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=25) as smtp:
+            smtp.ehlo()
+            if SMTP_STARTTLS:
+                smtp.starttls(context=context)
+                smtp.ehlo()
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.send_message(message)
+    return f"smtp:{uuid.uuid4()}"
+
+
 async def send_email(to: str, subject: str, html: str) -> Optional[str]:
-    if not EMAIL_KEY or EMAIL_KEY.startswith("{"):
-        logger.error("Email not configured (EMERGENT_EMAIL_KEY)")
-        return None
     _assert_safe_email(subject, html)
-    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
-    try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            resp = await c.post(f"{EMAIL_BASE_URL}/api/v1/email/send",
-                                headers={"X-Email-Key": EMAIL_KEY}, json=payload)
-        resp.raise_for_status()
-        return resp.json().get("id")
-    except Exception as e:
-        logger.error(f"Email send error to {to}: {e}")
-        return None
+
+    if EMAIL_KEY and not EMAIL_KEY.startswith("{"):
+        payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+        try:
+            async with httpx.AsyncClient(timeout=30) as client_http:
+                resp = await client_http.post(
+                    f"{EMAIL_BASE_URL}/api/v1/email/send",
+                    headers={"X-Email-Key": EMAIL_KEY},
+                    json=payload,
+                )
+            resp.raise_for_status()
+            return resp.json().get("id")
+        except Exception as exc:
+            logger.warning("Provider de e-mail principal falhou; tentando SMTP: %s", type(exc).__name__)
+
+    if SMTP_HOST and SMTP_FROM_EMAIL and SMTP_USERNAME and SMTP_PASSWORD:
+        try:
+            return await asyncio.to_thread(_smtp_send, to, subject, html)
+        except Exception as exc:
+            logger.error("SMTP send error to %s: %s", to, type(exc).__name__)
+            return None
+
+    logger.error("E-mail não configurado. Defina EMERGENT_EMAIL_KEY ou SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD/SMTP_FROM_EMAIL")
+    return None
 
 
 async def notify_owners(ticket: dict, owners: List[str]):
@@ -480,7 +531,7 @@ async def notify_owners(ticket: dict, owners: List[str]):
 async def send_password_reset_email(to_email: str, token: str) -> bool:
     base = FRONTEND_URL.rstrip("/")
     link = f"{base}/reset-password?token={token}"
-    if not EMAIL_KEY or EMAIL_KEY.startswith("{") or not base.startswith("https://"):
+    if not email_delivery_configured() or not base.startswith("https://"):
         if urlparse(base).hostname in ("localhost", "127.0.0.1", "::1"):
             logger.warning("Email not configured; reset link: %s", link)
         else:
@@ -509,7 +560,7 @@ async def send_password_reset_email(to_email: str, token: str) -> bool:
 async def send_welcome_email(to_email: str, name: str, token: str) -> bool:
     base = FRONTEND_URL.rstrip("/")
     link = f"{base}/reset-password?token={token}"
-    if not EMAIL_KEY or EMAIL_KEY.startswith("{") or not base.startswith("https://"):
+    if not email_delivery_configured() or not base.startswith("https://"):
         logger.warning("Welcome email not sent (config); set-password link: %s", link)
         return False
     brand = escape(EMAIL_FROM_NAME)
@@ -1111,7 +1162,7 @@ async def create_ticket(
     res = await db.tickets.insert_one(ticket)
     ticket["_id"] = res.inserted_id
 
-    owners = category.get("owners", [])
+    owners = list(dict.fromkeys([*(category.get("owners", []) or []), *DEFAULT_OWNERS]))
     if owners:
         background_tasks.add_task(notify_owners, dict(ticket), owners)
 
@@ -1490,6 +1541,10 @@ async def seed_admin():
         raise RuntimeError("ADMIN_PASSWORD deve ter ao menos 12 caracteres em produção")
     existing = await db.users.find_one({"email": admin_email})
     if existing is None:
+        any_admin = await db.users.find_one({"role": "admin"})
+        if any_admin is not None:
+            logger.info("Admin account already exists under a different e-mail; bootstrap skipped")
+            return
         await db.users.insert_one({
             "email": admin_email, "password_hash": hash_password(admin_password),
             "name": "Administrador", "role": "admin", "token_version": 0,
