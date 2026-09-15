@@ -23,6 +23,7 @@ const FIELD_TYPES = [
   { value: "number", label: "Número" },
   { value: "date", label: "Data" },
   { value: "checkbox", label: "Caixa de seleção" },
+  { value: "dependent_select", label: "Categoria + Subcategoria (dependente)" },
 ];
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -42,7 +43,16 @@ export default function CategoryManager({ categories, onChange }) {
     setForm({
       name: c.name, icon: c.icon, description: c.description,
       lead_time_hours: c.lead_time_hours, owners: [...(c.owners || [])],
-      fields: (c.fields || []).map((f) => ({ ...f, id: f.id || uid() })),
+      fields: (c.fields || []).map((f) => ({
+        ...f,
+        id: f.id || uid(),
+        parent_label: f.parent_label || "Categoria",
+        child_label: f.child_label || "Subcategoria",
+        dependent_options: (f.dependent_options || []).map((item) => ({
+          parent: item.parent || "",
+          children: [...(item.children || [])],
+        })),
+      })),
       template_columns: [...(c.template_columns || [])],
       template_filename: c.template_filename || "",
       active: c.active !== false,
@@ -51,11 +61,66 @@ export default function CategoryManager({ categories, onChange }) {
   };
 
   const addField = () =>
-    setForm((f) => ({ ...f, fields: [...f.fields, { id: uid(), label: "", type: "text", required: false, options: [] }] }));
+    setForm((f) => ({
+      ...f,
+      fields: [...f.fields, {
+        id: uid(),
+        label: "",
+        type: "text",
+        required: false,
+        options: [],
+        parent_label: "Categoria",
+        child_label: "Subcategoria",
+        dependent_options: [],
+      }],
+    }));
   const updateField = (id, patch) =>
     setForm((f) => ({ ...f, fields: f.fields.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
   const removeField = (id) =>
     setForm((f) => ({ ...f, fields: f.fields.filter((x) => x.id !== id) }));
+
+  const addDependentOption = (fieldId) => {
+    setForm((current) => ({
+      ...current,
+      fields: current.fields.map((field) =>
+        field.id === fieldId
+          ? {
+              ...field,
+              dependent_options: [
+                ...(field.dependent_options || []),
+                { parent: "", children: [] },
+              ],
+            }
+          : field
+      ),
+    }));
+  };
+
+  const updateDependentOption = (fieldId, index, patch) => {
+    setForm((current) => ({
+      ...current,
+      fields: current.fields.map((field) => {
+        if (field.id !== fieldId) return field;
+        const rows = [...(field.dependent_options || [])];
+        rows[index] = { ...rows[index], ...patch };
+        return { ...field, dependent_options: rows };
+      }),
+    }));
+  };
+
+  const removeDependentOption = (fieldId, index) => {
+    setForm((current) => ({
+      ...current,
+      fields: current.fields.map((field) =>
+        field.id === fieldId
+          ? {
+              ...field,
+              dependent_options: (field.dependent_options || []).filter((_, rowIndex) => rowIndex !== index),
+            }
+          : field
+      ),
+    }));
+  };
 
   const addOwner = () => {
     const e = ownerInput.trim().toLowerCase();
@@ -82,6 +147,19 @@ export default function CategoryManager({ categories, onChange }) {
       toast.error(`Adicione ao menos uma opção ao campo "${invalidSelect.label}"`);
       return;
     }
+    const invalidDependent = form.fields.find((field) => {
+      if (field.type !== "dependent_select") return false;
+      if (!field.parent_label?.trim() || !field.child_label?.trim()) return true;
+      const rows = field.dependent_options || [];
+      if (!rows.length) return true;
+      const parents = rows.map((row) => row.parent?.trim()).filter(Boolean);
+      if (parents.length !== rows.length || new Set(parents.map((parent) => parent.toLowerCase())).size !== parents.length) return true;
+      return rows.some((row) => !(row.children || []).some((child) => child.trim()));
+    });
+    if (invalidDependent) {
+      toast.error(`Configure categorias pai únicas e ao menos uma subcategoria para "${invalidDependent.label}"`);
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -90,7 +168,18 @@ export default function CategoryManager({ categories, onChange }) {
         template_columns: (form.template_columns || []).filter(Boolean),
         fields: form.fields.map((f) => ({
           ...f,
-          options: f.type === "select" ? f.options.filter(Boolean) : [],
+          label: f.label.trim(),
+          options: f.type === "select"
+            ? (f.options || []).map((option) => option.trim()).filter(Boolean)
+            : [],
+          parent_label: f.type === "dependent_select" ? (f.parent_label || "Categoria").trim() : null,
+          child_label: f.type === "dependent_select" ? (f.child_label || "Subcategoria").trim() : null,
+          dependent_options: f.type === "dependent_select"
+            ? (f.dependent_options || []).map((row) => ({
+                parent: row.parent.trim(),
+                children: (row.children || []).map((child) => child.trim()).filter(Boolean),
+              }))
+            : [],
         })),
       };
       if (editing === "new") await api.post("/categories", payload);
@@ -269,7 +358,17 @@ export default function CategoryManager({ categories, onChange }) {
                     <div className="flex items-center gap-2">
                       <GripVertical className="hidden sm:block w-4 h-4 text-slate-300 shrink-0" />
                       <Input value={f.label} onChange={(e) => updateField(f.id, { label: e.target.value })} placeholder="Título do campo" className="flex-1 bg-white h-9" />
-                      <Select value={f.type} onValueChange={(v) => updateField(f.id, { type: v })}>
+                      <Select
+                        value={f.type}
+                        onValueChange={(v) => updateField(f.id, {
+                          type: v,
+                          ...(v === "dependent_select" ? {
+                            parent_label: f.parent_label || "Categoria",
+                            child_label: f.child_label || "Subcategoria",
+                            dependent_options: f.dependent_options || [],
+                          } : {}),
+                        })}
+                      >
                         <SelectTrigger className="w-full sm:w-40 bg-white h-9"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {FIELD_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
@@ -286,6 +385,93 @@ export default function CategoryManager({ categories, onChange }) {
                         placeholder="Opções separadas por vírgula: Opção A, Opção B"
                         className="mt-2 sm:ml-6 bg-white h-9"
                       />
+                    )}
+                    {f.type === "dependent_select" && (
+                      <div className="mt-3 sm:ml-6 rounded-xl border border-purple-100 bg-white p-3 space-y-3">
+                        <div>
+                          <p className="text-xs font-bold text-purple-700">Campo dependente em cascata</p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            Cadastre cada categoria pai e, abaixo dela, as subcategorias que devem aparecer.
+                          </p>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div>
+                            <Label className="text-xs text-slate-600">Nome da lista principal</Label>
+                            <Input
+                              data-testid={`dependent-parent-label-${f.id}`}
+                              value={f.parent_label || ""}
+                              onChange={(e) => updateField(f.id, { parent_label: e.target.value })}
+                              placeholder="Ex: Categoria"
+                              className="mt-1 bg-white h-9"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs text-slate-600">Nome da lista dependente</Label>
+                            <Input
+                              data-testid={`dependent-child-label-${f.id}`}
+                              value={f.child_label || ""}
+                              onChange={(e) => updateField(f.id, { child_label: e.target.value })}
+                              placeholder="Ex: Subcategoria"
+                              className="mt-1 bg-white h-9"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          {(f.dependent_options || []).map((row, index) => (
+                            <div key={`${f.id}-dependency-${index}`} className="rounded-xl border border-slate-100 bg-slate-50/80 p-2.5">
+                              <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_auto] gap-2 items-end">
+                                <div>
+                                  <Label className="text-[11px] text-slate-500">Categoria pai</Label>
+                                  <Input
+                                    data-testid={`dependent-parent-${f.id}-${index}`}
+                                    value={row.parent || ""}
+                                    onChange={(e) => updateDependentOption(f.id, index, { parent: e.target.value })}
+                                    placeholder="Ex: HGU"
+                                    className="mt-1 bg-white h-9"
+                                  />
+                                </div>
+                                <div>
+                                  <Label className="text-[11px] text-slate-500">Subcategorias</Label>
+                                  <Input
+                                    data-testid={`dependent-children-${f.id}-${index}`}
+                                    value={(row.children || []).join(", ")}
+                                    onChange={(e) => updateDependentOption(f.id, index, {
+                                      children: e.target.value.split(",").map((item) => item.trim()),
+                                    })}
+                                    placeholder="Ex: HGU 5, HGU 6"
+                                    className="mt-1 bg-white h-9"
+                                  />
+                                </div>
+                                <button
+                                  type="button"
+                                  aria-label={`Remover categoria pai ${row.parent || index + 1}`}
+                                  onClick={() => removeDependentOption(f.id, index)}
+                                  className="h-9 w-9 rounded-lg inline-flex items-center justify-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          data-testid={`add-dependent-parent-${f.id}`}
+                          onClick={() => addDependentOption(f.id)}
+                          className="border-purple-200 text-purple-700 gap-1.5"
+                        >
+                          <Plus className="w-3.5 h-3.5" /> Adicionar categoria pai
+                        </Button>
+
+                        <div className="rounded-lg bg-purple-50 px-3 py-2 text-[11px] text-purple-700">
+                          Exemplo: HGU → HGU 5, HGU 6 · Drop → Drop pré con 300, Drop externo
+                        </div>
+                      </div>
                     )}
                     <label className="flex items-center gap-2 mt-2 sm:ml-6 cursor-pointer">
                       <Checkbox checked={f.required} onCheckedChange={(v) => updateField(f.id, { required: !!v })} />
