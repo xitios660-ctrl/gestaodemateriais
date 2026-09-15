@@ -1,11 +1,13 @@
 import pytest
 
 from fastapi import HTTPException
+from starlette.requests import Request
 from server import (
     MIN_PASSWORD_LENGTH,
     _assert_safe_email,
     _safe_local_path,
     as_object_id,
+    get_client_ip,
     ser_category_public,
     ser_ticket_public,
 )
@@ -83,3 +85,34 @@ def test_email_guard_accepts_safe_https_link():
         "Aviso",
         '<p><a href="https://example.com/reset">Redefinir acesso</a></p>',
     )
+
+
+def test_client_ip_prefers_proxy_client_header():
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [
+            (b"cf-connecting-ip", b"203.0.113.9"),
+            (b"x-forwarded-for", b"198.51.100.2, 10.0.0.1"),
+        ],
+        "client": ("10.0.0.5", 12345),
+        "server": ("testserver", 80),
+        "scheme": "https",
+        "query_string": b"",
+    })
+    assert get_client_ip(request) == "203.0.113.9"
+
+
+def test_client_ip_falls_back_to_forwarded_for():
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"x-forwarded-for", b"198.51.100.20, 10.0.0.1")],
+        "client": ("10.0.0.5", 12345),
+        "server": ("testserver", 80),
+        "scheme": "https",
+        "query_string": b"",
+    })
+    assert get_client_ip(request) == "198.51.100.20"
