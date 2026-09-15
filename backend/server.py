@@ -1181,10 +1181,8 @@ async def seed_admin():
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Admin seeded")
-    elif not verify_password(admin_password, existing["password_hash"]):
-        await db.users.update_one({"email": admin_email},
-                                  {"$set": {"password_hash": hash_password(admin_password)}})
-        logger.info("Admin password updated")
+    else:
+        logger.info("Admin account already exists; bootstrap credentials were not reapplied")
 
 
 async def seed_categories():
