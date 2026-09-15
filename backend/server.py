@@ -496,11 +496,28 @@ def ser_category(doc: dict) -> dict:
     return doc
 
 
+def ser_category_public(doc: dict) -> dict:
+    """Public category shape. Internal routing e-mails must never leave the admin API."""
+    data = ser_category(doc)
+    data.pop("owners", None)
+    return data
+
+
 def ser_ticket(doc: dict) -> dict:
     doc = dict(doc)
     doc["id"] = str(doc.pop("_id"))
     doc["status_label"] = STATUS_LABELS.get(doc.get("status"), doc.get("status"))
     return doc
+
+
+def ser_ticket_public(doc: dict) -> dict:
+    """Minimal ticket shape used by the unauthenticated tracking screen."""
+    data = ser_ticket(doc)
+    allowed = {
+        "id", "ticket_number", "category_name", "category_icon", "status",
+        "status_label", "lead_time_hours", "created_at", "due_at",
+    }
+    return {key: value for key, value in data.items() if key in allowed}
 
 
 def ser_user(doc: dict) -> dict:
@@ -705,18 +722,28 @@ async def reset_password(payload: ResetInput):
 # Category endpoints
 # ----------------------------------------------------------------------------
 @api_router.get("/categories")
-async def list_categories(all: bool = False):
-    query = {} if all else {"active": True}
-    docs = await db.categories.find(query).sort("created_at", 1).to_list(200)
-    return [ser_category(d) for d in docs]
+async def list_categories(request: Request, all: bool = False):
+    if all:
+        user = await get_current_user(request)
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Acesso restrito a administradores")
+        docs = await db.categories.find({}).sort("created_at", 1).to_list(200)
+        return [ser_category(d) for d in docs]
+
+    docs = await db.categories.find({"active": True}).sort("created_at", 1).to_list(200)
+    return [ser_category_public(d) for d in docs]
 
 
 @api_router.get("/categories/{cat_id}")
 async def get_category(cat_id: str):
-    doc = await db.categories.find_one({"_id": ObjectId(cat_id)})
+    try:
+        oid = ObjectId(cat_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    doc = await db.categories.find_one({"_id": oid, "active": True})
     if not doc:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
-    return ser_category(doc)
+    return ser_category_public(doc)
 
 
 @api_router.get("/categories/{cat_id}/template")
@@ -788,15 +815,21 @@ async def create_ticket(
     payload: str = Form(...),
     file: Optional[UploadFile] = File(None),
 ):
+    if len(payload.encode("utf-8")) > 256 * 1024:
+        raise HTTPException(status_code=413, detail="Solicitação muito grande")
     try:
         data = json.loads(payload)
     except Exception:
-        raise HTTPException(status_code=400, detail="Payload inválido")
+        raise HTTPException(status_code=400, detail="Dados da solicitação inválidos")
 
-    category_id = data.get("category_id")
+    category_id = str(data.get("category_id") or "").strip()
     if not category_id:
         raise HTTPException(status_code=400, detail="Categoria obrigatória")
-    category = await db.categories.find_one({"_id": ObjectId(category_id)})
+    try:
+        category_oid = ObjectId(category_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    category = await db.categories.find_one({"_id": category_oid, "active": True})
     if not category:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
 
@@ -804,6 +837,25 @@ async def create_ticket(
     for field in ("matricula", "email", "empresa"):
         if not str(requester.get(field, "")).strip():
             raise HTTPException(status_code=400, detail=f"Campo obrigatório: {field}")
+    requester_email = str(requester.get("email", "")).strip().lower()
+    if len(requester_email) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", requester_email):
+        raise HTTPException(status_code=400, detail="Informe um e-mail válido")
+    if len(str(requester.get("matricula", ""))) > 80 or len(str(requester.get("empresa", ""))) > 160:
+        raise HTTPException(status_code=400, detail="Dados do solicitante excedem o limite permitido")
+
+    field_values = data.get("field_values") or {}
+    if not isinstance(field_values, dict) or len(field_values) > 100:
+        raise HTTPException(status_code=400, detail="Campos da solicitação inválidos")
+    for field in category.get("fields", []):
+        if not field.get("required"):
+            continue
+        value = field_values.get(field.get("label"))
+        missing = value is not True if field.get("type") == "checkbox" else not str(value or "").strip()
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Campo obrigatório: {field.get('label', 'campo')}")
+    for key, value in field_values.items():
+        if len(str(key)) > 160 or len(str(value)) > 10000:
+            raise HTTPException(status_code=400, detail="Um dos campos excede o limite permitido")
 
     file_ref = None
     if file is not None:
@@ -811,12 +863,16 @@ async def create_ticket(
         if raw:
             if len(raw) > 10 * 1024 * 1024:
                 raise HTTPException(status_code=400, detail="Arquivo excede 10MB")
-            ext = file.filename.split(".")[-1] if file.filename and "." in file.filename else "bin"
+            safe_name = os.path.basename(file.filename or "arquivo").replace("\r", "").replace("\n", "")
+            ext = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
+            allowed_extensions = {"pdf", "png", "jpg", "jpeg", "doc", "docx", "xls", "xlsx", "csv", "txt"}
+            if ext not in allowed_extensions:
+                raise HTTPException(status_code=400, detail="Tipo de arquivo não permitido")
             path = f"{APP_NAME}/tickets/{uuid.uuid4()}.{ext}"
             result = put_object(path, raw, file.content_type or "application/octet-stream")
             file_ref = {
                 "storage_path": result["path"],
-                "original_filename": file.filename,
+                "original_filename": safe_name,
                 "content_type": file.content_type or "application/octet-stream",
                 "size": result.get("size", len(raw)),
             }
@@ -834,7 +890,7 @@ async def create_ticket(
             "email": requester["email"].strip().lower(),
             "empresa": requester["empresa"].strip(),
         },
-        "field_values": data.get("field_values", {}),
+        "field_values": field_values,
         "file": file_ref,
         "status": "aberto",
         "lead_time_hours": lead,
@@ -856,13 +912,15 @@ async def create_ticket(
 @api_router.get("/tickets/track")
 async def track_ticket(q: str):
     q = q.strip()
+    if not q or len(q) > 254:
+        return []
     query = {"$or": [
         {"ticket_number": q.upper()},
         {"requester.email": q.lower()},
         {"requester.matricula": q},
     ]}
     docs = await db.tickets.find(query).sort("created_at", -1).to_list(50)
-    return [ser_ticket(d) for d in docs]
+    return [ser_ticket_public(d) for d in docs]
 
 
 @api_router.get("/tickets")
@@ -874,7 +932,7 @@ async def list_tickets(status: Optional[str] = None, category_id: Optional[str] 
     if category_id and category_id != "all":
         query["category_id"] = category_id
     if search:
-        s = search.strip()
+        s = re.escape(search.strip()[:160])
         query["$or"] = [
             {"ticket_number": {"$regex": s, "$options": "i"}},
             {"requester.email": {"$regex": s, "$options": "i"}},
@@ -928,9 +986,10 @@ async def download_file(path: str, user: dict = Depends(get_current_user)):
     if user.get("role") != "admin" and record.get("category_id") not in (user.get("categories") or []):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     data, content_type = get_object(path)
-    fname = record["file"].get("original_filename", "arquivo")
+    fname = os.path.basename(record["file"].get("original_filename", "arquivo")).replace("\r", "").replace("\n", "").replace('"', "")
     return StarletteResponse(content=data, media_type=record["file"].get("content_type", content_type),
-                             headers={"Content-Disposition": f'inline; filename="{fname}"'})
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                                      "X-Content-Type-Options": "nosniff"})
 
 
 # ----------------------------------------------------------------------------
@@ -1027,8 +1086,16 @@ DEFAULT_CATEGORIES = [
 
 
 async def seed_admin():
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    admin_email = (os.environ.get("ADMIN_EMAIL") or "").strip().lower()
+    admin_password = os.environ.get("ADMIN_PASSWORD") or ""
+    is_production = bool(os.environ.get("RENDER") or os.environ.get("ENVIRONMENT") == "production")
+    if not admin_email or not admin_password:
+        if is_production:
+            raise RuntimeError("ADMIN_EMAIL e ADMIN_PASSWORD devem ser configurados em produção")
+        admin_email = "admin@example.com"
+        admin_password = "dev-only-admin-password"
+    if len(admin_password) < 12 and is_production:
+        raise RuntimeError("ADMIN_PASSWORD deve ter ao menos 12 caracteres em produção")
     existing = await db.users.find_one({"email": admin_email})
     if existing is None:
         await db.users.insert_one({
@@ -1086,7 +1153,8 @@ async def health():
         await client.admin.command("ping")
         return {"status": "ok", "database": "connected"}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Banco indisponível: {e}")
+        logger.error("Health check falhou: %s", e)
+        raise HTTPException(status_code=503, detail="Serviço temporariamente indisponível")
 
 
 app.include_router(api_router)
