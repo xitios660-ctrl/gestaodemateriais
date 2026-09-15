@@ -68,6 +68,20 @@ export default function CategoryManager({ categories, onChange }) {
 
   const save = async () => {
     if (!form.name.trim()) { toast.error("Nome da categoria é obrigatório"); return; }
+    if (!Number(form.lead_time_hours) || Number(form.lead_time_hours) < 1) {
+      toast.error("O prazo de atendimento deve ser maior que zero");
+      return;
+    }
+    const invalidField = form.fields.find((field) => !field.label?.trim());
+    if (invalidField) {
+      toast.error("Todos os campos personalizados precisam de um título");
+      return;
+    }
+    const invalidSelect = form.fields.find((field) => field.type === "select" && !(field.options || []).some((option) => option.trim()));
+    if (invalidSelect) {
+      toast.error(`Adicione ao menos uma opção ao campo "${invalidSelect.label}"`);
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -111,6 +125,18 @@ export default function CategoryManager({ categories, onChange }) {
         </Button>
       </div>
 
+      {categories.length === 0 ? (
+        <div className="premium-surface rounded-3xl py-14 px-6 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-purple-50 flex items-center justify-center mx-auto mb-4">
+            <Plus className="w-6 h-6 text-purple-600" />
+          </div>
+          <h3 className="font-display font-bold text-slate-900">Nenhuma categoria cadastrada</h3>
+          <p className="text-sm text-slate-500 mt-1">Crie a primeira categoria para disponibilizar um fluxo de solicitação no portal.</p>
+          <Button onClick={openNew} className="mt-5 bg-[#660099] hover:bg-[#520080] gap-2">
+            <Plus className="w-4 h-4" /> Criar primeira categoria
+          </Button>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {categories.map((c) => (
           <div key={c.id} data-testid={`category-item-${c.id}`} className="premium-card p-5">
@@ -142,6 +168,7 @@ export default function CategoryManager({ categories, onChange }) {
           </div>
         ))}
       </div>
+      )}
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl sm:rounded-3xl border-purple-100">
