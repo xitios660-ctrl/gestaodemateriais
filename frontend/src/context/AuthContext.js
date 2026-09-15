@@ -49,6 +49,7 @@ export function AuthProvider({ children }) {
     sessionGeneration.current += 1;
     checkedSession.current = true;
     setSessionChecked(true);
+    setLoading(false);
     setUser(data);
     return data;
   };

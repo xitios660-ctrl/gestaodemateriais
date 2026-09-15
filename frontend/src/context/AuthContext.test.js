@@ -65,6 +65,7 @@ test("a delayed anonymous session probe cannot overwrite a successful login", as
     ),
   );
   await act(async () => holder.querySelector("button").click());
+  expect(holder.textContent).toContain("QA account");
   await act(async () => rejectProbe(new Error("old session")));
   expect(holder.textContent).toContain("QA account");
 });
