@@ -139,7 +139,7 @@ export default function AuditManager() {
               return (
                 <motion.article key={entry.id} variants={fadeUp} className="p-4 sm:p-5 flex items-start gap-3 sm:gap-4">
                   <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center shrink-0">
-                    <Icon className="w-4.5 h-4.5 text-purple-700" />
+                    <Icon className="w-4 h-4 text-purple-700" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-3">
