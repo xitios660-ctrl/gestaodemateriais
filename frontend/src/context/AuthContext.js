@@ -20,6 +20,9 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     checkSession();
+    const expireSession = () => setUser(false);
+    window.addEventListener("auth:expired", expireSession);
+    return () => window.removeEventListener("auth:expired", expireSession);
   }, []);
 
   const login = async (email, password) => {
