@@ -62,8 +62,8 @@ export default function UserManager() {
   const save = async () => {
     if (!form.name.trim()) { toast.error("Informe o nome"); return; }
     if (editing === "new" && !form.email.trim()) { toast.error("Informe o e-mail"); return; }
-    if (editing === "new" && !form.send_welcome && form.password.length < 6) {
-      toast.error("Defina uma senha (mín. 6) ou ative o e-mail de boas-vindas");
+    if (editing === "new" && !form.send_welcome && form.password.length < 8) {
+      toast.error("Defina uma senha (mín. 8) ou ative o e-mail de boas-vindas");
       return;
     }
     setSaving(true);
@@ -112,7 +112,31 @@ export default function UserManager() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-16"><Loader2 className="w-7 h-7 text-[#660099] animate-spin" /></div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4" aria-label="Carregando usuários">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="premium-surface rounded-2xl p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl skeleton-shimmer shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 w-36 rounded skeleton-shimmer" />
+                  <div className="h-3 w-52 max-w-full rounded skeleton-shimmer" />
+                  <div className="h-3 w-24 rounded skeleton-shimmer" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : users.length === 0 ? (
+        <div className="premium-surface rounded-3xl py-14 px-6 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-purple-50 flex items-center justify-center mx-auto mb-4">
+            <UserCircle className="w-6 h-6 text-purple-600" />
+          </div>
+          <h3 className="font-display font-bold text-slate-900">Nenhum responsável cadastrado</h3>
+          <p className="text-sm text-slate-500 mt-1">Cadastre o primeiro responsável e defina exatamente quais categorias ele pode acessar.</p>
+          <Button onClick={openNew} className="mt-5 bg-[#660099] hover:bg-[#520080] gap-2">
+            <Plus className="w-4 h-4" /> Novo responsável
+          </Button>
+        </div>
       ) : (
         <div data-testid="admin-users-list" className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {users.map((u) => (
