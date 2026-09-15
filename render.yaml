@@ -10,8 +10,6 @@ services:
         value: gestao_materiais
       - key: JWT_SECRET
         generateValue: true
-      - key: FRONTEND_URL
-        sync: false
       - key: MONGO_URL
         sync: false
       - key: ADMIN_EMAIL
