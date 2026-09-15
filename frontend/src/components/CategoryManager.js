@@ -68,6 +68,20 @@ export default function CategoryManager({ categories, onChange }) {
 
   const save = async () => {
     if (!form.name.trim()) { toast.error("Nome da categoria é obrigatório"); return; }
+    if (!Number(form.lead_time_hours) || Number(form.lead_time_hours) < 1) {
+      toast.error("O prazo de atendimento deve ser maior que zero");
+      return;
+    }
+    const invalidField = form.fields.find((field) => !field.label?.trim());
+    if (invalidField) {
+      toast.error("Todos os campos personalizados precisam de um título");
+      return;
+    }
+    const invalidSelect = form.fields.find((field) => field.type === "select" && !(field.options || []).some((option) => option.trim()));
+    if (invalidSelect) {
+      toast.error(`Adicione ao menos uma opção ao campo "${invalidSelect.label}"`);
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -104,22 +118,34 @@ export default function CategoryManager({ categories, onChange }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
         <p className="text-sm text-slate-500">{categories.length} categoria(s) cadastrada(s)</p>
-        <Button data-testid="admin-category-create-button" onClick={openNew} className="bg-[#660099] hover:bg-[#520080] gap-2">
+        <Button data-testid="admin-category-create-button" onClick={openNew} className="bg-[#660099] hover:bg-[#520080] gap-2 shadow-md shadow-purple-500/15 w-full sm:w-auto">
           <Plus className="w-4 h-4" /> Nova Categoria
         </Button>
       </div>
 
+      {categories.length === 0 ? (
+        <div className="premium-surface rounded-3xl py-14 px-6 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-purple-50 flex items-center justify-center mx-auto mb-4">
+            <Plus className="w-6 h-6 text-purple-600" />
+          </div>
+          <h3 className="font-display font-bold text-slate-900">Nenhuma categoria cadastrada</h3>
+          <p className="text-sm text-slate-500 mt-1">Crie a primeira categoria para disponibilizar um fluxo de solicitação no portal.</p>
+          <Button onClick={openNew} className="mt-5 bg-[#660099] hover:bg-[#520080] gap-2">
+            <Plus className="w-4 h-4" /> Criar primeira categoria
+          </Button>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {categories.map((c) => (
-          <div key={c.id} data-testid={`category-item-${c.id}`} className="bg-white rounded-2xl border border-purple-100 p-5">
+          <div key={c.id} data-testid={`category-item-${c.id}`} className="premium-card p-5">
             <div className="flex items-start gap-3">
               <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#660099] to-[#9b26b6] flex items-center justify-center shadow-lg shadow-purple-500/25 shrink-0">
                 <CategoryIcon name={c.icon} className="w-5 h-5 text-white" />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                   <h3 className="font-display font-semibold text-slate-900 truncate">{c.name}</h3>
                   {c.active === false && <span className="text-[10px] bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded">inativa</span>}
                 </div>
@@ -135,16 +161,17 @@ export default function CategoryManager({ categories, onChange }) {
               <Button variant="outline" size="sm" data-testid={`edit-category-${c.id}`} onClick={() => openEdit(c)} className="flex-1 border-purple-200 text-purple-700 hover:bg-purple-50 gap-1.5">
                 <Pencil className="w-3.5 h-3.5" /> Editar
               </Button>
-              <Button variant="outline" size="sm" data-testid={`delete-category-${c.id}`} onClick={() => setDeleteTarget(c)} className="border-rose-200 text-rose-600 hover:bg-rose-50">
+              <Button variant="outline" size="sm" data-testid={`delete-category-${c.id}`} aria-label={`Remover categoria ${c.name}`} onClick={() => setDeleteTarget(c)} className="border-rose-200 text-rose-600 hover:bg-rose-50">
                 <Trash2 className="w-3.5 h-3.5" />
               </Button>
             </div>
           </div>
         ))}
       </div>
+      )}
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl sm:rounded-3xl border-purple-100">
           <DialogHeader>
             <DialogTitle>{editing === "new" ? "Nova Categoria" : "Editar Categoria"}</DialogTitle>
           </DialogHeader>
@@ -204,7 +231,7 @@ export default function CategoryManager({ categories, onChange }) {
                 {form.owners.map((o) => (
                   <span key={o} className="inline-flex items-center gap-1.5 bg-purple-50 text-purple-700 text-sm px-3 py-1 rounded-full">
                     {o}
-                    <button type="button" onClick={() => setForm((f) => ({ ...f, owners: f.owners.filter((x) => x !== o) }))}>
+                    <button type="button" aria-label={`Remover responsável ${o}`} onClick={() => setForm((f) => ({ ...f, owners: f.owners.filter((x) => x !== o) }))}>
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </span>
@@ -238,17 +265,17 @@ export default function CategoryManager({ categories, onChange }) {
                   <p className="text-sm text-slate-400 text-center py-4 bg-slate-50 rounded-xl">Nenhum campo. Adicione campos personalizados.</p>
                 )}
                 {form.fields.map((f) => (
-                  <div key={f.id} data-testid={`field-editor-${f.id}`} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                  <div key={f.id} data-testid={`field-editor-${f.id}`} className="bg-slate-50/80 rounded-xl p-3 border border-slate-100">
                     <div className="flex items-center gap-2">
-                      <GripVertical className="w-4 h-4 text-slate-300" />
+                      <GripVertical className="hidden sm:block w-4 h-4 text-slate-300 shrink-0" />
                       <Input value={f.label} onChange={(e) => updateField(f.id, { label: e.target.value })} placeholder="Título do campo" className="flex-1 bg-white h-9" />
                       <Select value={f.type} onValueChange={(v) => updateField(f.id, { type: v })}>
-                        <SelectTrigger className="w-40 bg-white h-9"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-full sm:w-40 bg-white h-9"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {FIELD_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
                         </SelectContent>
                       </Select>
-                      <button type="button" onClick={() => removeField(f.id)} className="text-slate-400 hover:text-rose-500">
+                      <button type="button" aria-label={`Remover campo ${f.label || "sem título"}`} onClick={() => removeField(f.id)} className="text-slate-400 hover:text-rose-500">
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
@@ -257,10 +284,10 @@ export default function CategoryManager({ categories, onChange }) {
                         value={(f.options || []).join(", ")}
                         onChange={(e) => updateField(f.id, { options: e.target.value.split(",").map((s) => s.trim()) })}
                         placeholder="Opções separadas por vírgula: Opção A, Opção B"
-                        className="mt-2 ml-6 bg-white h-9"
+                        className="mt-2 sm:ml-6 bg-white h-9"
                       />
                     )}
-                    <label className="flex items-center gap-2 mt-2 ml-6 cursor-pointer">
+                    <label className="flex items-center gap-2 mt-2 sm:ml-6 cursor-pointer">
                       <Checkbox checked={f.required} onCheckedChange={(v) => updateField(f.id, { required: !!v })} />
                       <span className="text-xs text-slate-600">Campo obrigatório</span>
                     </label>

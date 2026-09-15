@@ -39,6 +39,8 @@ export default function UserManager() {
       ]);
       setUsers(u.data);
       setCategories(c.data);
+    } catch (err) {
+      toast.error(formatApiErrorDetail(err.response?.data?.detail) || "Não foi possível carregar os usuários");
     } finally {
       setLoading(false);
     }
@@ -49,8 +51,10 @@ export default function UserManager() {
   const catName = (id) => categories.find((c) => c.id === id)?.name || id;
 
   const openNew = () => { setEditing("new"); setForm(EMPTY); };
-  const openEdit = (u) =>
-    setEditing(u.id) || setForm({ name: u.name, email: u.email, password: "", role: u.role, categories: [...(u.categories || [])], send_welcome: false });
+  const openEdit = (u) => {
+    setEditing(u.id);
+    setForm({ name: u.name, email: u.email, password: "", role: u.role, categories: [...(u.categories || [])], send_welcome: false });
+  };
 
   const toggleCat = (id) =>
     setForm((f) => ({ ...f, categories: f.categories.includes(id) ? f.categories.filter((x) => x !== id) : [...f.categories, id] }));
@@ -58,8 +62,8 @@ export default function UserManager() {
   const save = async () => {
     if (!form.name.trim()) { toast.error("Informe o nome"); return; }
     if (editing === "new" && !form.email.trim()) { toast.error("Informe o e-mail"); return; }
-    if (editing === "new" && !form.send_welcome && form.password.length < 6) {
-      toast.error("Defina uma senha (mín. 6) ou ative o e-mail de boas-vindas");
+    if (editing === "new" && !form.send_welcome && form.password.length < 8) {
+      toast.error("Defina uma senha (mín. 8) ou ative o e-mail de boas-vindas");
       return;
     }
     setSaving(true);
@@ -100,19 +104,43 @@ export default function UserManager() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
         <p className="text-sm text-slate-500">{users.length} responsável(is) com acesso ao painel</p>
-        <Button data-testid="admin-user-create-button" onClick={openNew} className="bg-[#660099] hover:bg-[#520080] gap-2">
+        <Button data-testid="admin-user-create-button" onClick={openNew} className="bg-[#660099] hover:bg-[#520080] gap-2 shadow-md shadow-purple-500/15 w-full sm:w-auto">
           <Plus className="w-4 h-4" /> Novo Responsável
         </Button>
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-16"><Loader2 className="w-7 h-7 text-[#660099] animate-spin" /></div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4" aria-label="Carregando usuários">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="premium-surface rounded-2xl p-5">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl skeleton-shimmer shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 w-36 rounded skeleton-shimmer" />
+                  <div className="h-3 w-52 max-w-full rounded skeleton-shimmer" />
+                  <div className="h-3 w-24 rounded skeleton-shimmer" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : users.length === 0 ? (
+        <div className="premium-surface rounded-3xl py-14 px-6 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-purple-50 flex items-center justify-center mx-auto mb-4">
+            <UserCircle className="w-6 h-6 text-purple-600" />
+          </div>
+          <h3 className="font-display font-bold text-slate-900">Nenhum responsável cadastrado</h3>
+          <p className="text-sm text-slate-500 mt-1">Cadastre o primeiro responsável e defina exatamente quais categorias ele pode acessar.</p>
+          <Button onClick={openNew} className="mt-5 bg-[#660099] hover:bg-[#520080] gap-2">
+            <Plus className="w-4 h-4" /> Novo responsável
+          </Button>
+        </div>
       ) : (
         <div data-testid="admin-users-list" className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {users.map((u) => (
-            <div key={u.id} data-testid={`user-item-${u.id}`} className="bg-white rounded-2xl border border-purple-100 p-5">
+            <div key={u.id} data-testid={`user-item-${u.id}`} className="premium-card p-5">
               <div className="flex items-start gap-3">
                 <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#660099] to-[#9b26b6] flex items-center justify-center shadow-lg shadow-purple-500/25 shrink-0">
                   <UserCircle className="w-6 h-6 text-white" />
@@ -146,7 +174,7 @@ export default function UserManager() {
                   <Pencil className="w-3.5 h-3.5" /> Editar
                 </Button>
                 {current?.id !== u.id && (
-                  <Button variant="outline" size="sm" data-testid={`delete-user-${u.id}`} onClick={() => setDeleteTarget(u)} className="border-rose-200 text-rose-600 hover:bg-rose-50">
+                  <Button variant="outline" size="sm" data-testid={`delete-user-${u.id}`} aria-label={`Remover usuário ${u.name}`} onClick={() => setDeleteTarget(u)} className="border-rose-200 text-rose-600 hover:bg-rose-50">
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>
                 )}
@@ -157,7 +185,7 @@ export default function UserManager() {
       )}
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
-        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-md max-h-[92vh] overflow-y-auto rounded-2xl sm:rounded-3xl border-purple-100">
           <DialogHeader>
             <DialogTitle>{editing === "new" ? "Novo Responsável" : "Editar Usuário"}</DialogTitle>
           </DialogHeader>
@@ -194,7 +222,7 @@ export default function UserManager() {
             {form.role === "responsavel" && (
               <div>
                 <Label>Categorias que este responsável pode ver</Label>
-                <div className="mt-2 space-y-2 max-h-40 overflow-y-auto rounded-xl border border-slate-100 p-3 bg-slate-50">
+                <div className="mt-2 space-y-2 max-h-48 overflow-y-auto rounded-xl border border-purple-100 p-3 bg-slate-50/80">
                   {categories.length === 0 && <p className="text-sm text-slate-400">Nenhuma categoria cadastrada.</p>}
                   {categories.map((c) => (
                     <label key={c.id} data-testid={`user-cat-${c.id}`} className="flex items-center gap-2.5 cursor-pointer">

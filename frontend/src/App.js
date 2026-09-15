@@ -1,15 +1,18 @@
 import "@/App.css";
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
-import Portal from "@/pages/Portal";
-import TicketForm from "@/pages/TicketForm";
-import Tracker from "@/pages/Tracker";
-import AdminLogin from "@/pages/AdminLogin";
-import ForgotPassword from "@/pages/ForgotPassword";
-import ResetPassword from "@/pages/ResetPassword";
-import AdminDashboard from "@/pages/AdminDashboard";
+import AppErrorBoundary from "@/components/AppErrorBoundary";
+import ConnectionStatus from "@/components/ConnectionStatus";
+const Portal = lazy(() => import("@/pages/Portal"));
+const TicketForm = lazy(() => import("@/pages/TicketForm"));
+const Tracker = lazy(() => import("@/pages/Tracker"));
+const AdminLogin = lazy(() => import("@/pages/AdminLogin"));
+const ForgotPassword = lazy(() => import("@/pages/ForgotPassword"));
+const ResetPassword = lazy(() => import("@/pages/ResetPassword"));
+const AdminDashboard = lazy(() => import("@/pages/AdminDashboard"));
 
 function AppLoader() {
   return (
@@ -66,12 +69,17 @@ function AnimatedRoutes() {
 function App() {
   return (
     <div className="App">
-      <AuthProvider>
-        <BrowserRouter>
+      <BrowserRouter>
+        <AuthProvider>
           <Toaster position="top-right" richColors closeButton toastOptions={{ duration: 3500 }} />
-          <AnimatedRoutes />
-        </BrowserRouter>
-      </AuthProvider>
+          <ConnectionStatus />
+          <AppErrorBoundary>
+            <Suspense fallback={<AppLoader />}>
+              <AnimatedRoutes />
+            </Suspense>
+          </AppErrorBoundary>
+        </AuthProvider>
+      </BrowserRouter>
     </div>
   );
 }

@@ -29,7 +29,9 @@ api.interceptors.response.use(
         await refreshing;
         return api(original);
       } catch {
-        // Session really expired. The calling screen will handle the 401.
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("auth:expired"));
+        }
       }
     }
 
@@ -38,15 +40,24 @@ api.interceptors.response.use(
 );
 
 export function formatApiErrorDetail(detail) {
-  if (detail == null) return "Algo deu errado. Tente novamente.";
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail))
-    return detail
-      .map((e) => (e && typeof e.msg === "string" ? e.msg : JSON.stringify(e)))
+  const fallback = "Não foi possível concluir a ação. Tente novamente.";
+  if (detail == null) return fallback;
+  if (typeof detail === "string") {
+    const clean = detail.trim();
+    return clean && clean.length <= 280 ? clean : fallback;
+  }
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => (item && typeof item.msg === "string" ? item.msg.trim() : ""))
       .filter(Boolean)
-      .join(" ");
-  if (detail && typeof detail.msg === "string") return detail.msg;
-  return String(detail);
+      .slice(0, 3);
+    return messages.length ? messages.join(" ") : fallback;
+  }
+  if (detail && typeof detail.msg === "string") {
+    const clean = detail.msg.trim();
+    return clean && clean.length <= 280 ? clean : fallback;
+  }
+  return fallback;
 }
 
 export const ICON_OPTIONS = [

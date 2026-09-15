@@ -6,6 +6,8 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 import logging
+import asyncio
+import csv
 import uuid
 import json
 import random
@@ -14,21 +16,21 @@ import hashlib
 import ipaddress
 import re
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Annotated
+from typing import List, Optional, Annotated, Literal
 from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urlparse
-from io import BytesIO
+from io import BytesIO, StringIO
 
 import bcrypt
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 import jwt
 import httpx
-import requests
 from fastapi import FastAPI, APIRouter, Request, Response, HTTPException, Depends, UploadFile, File, Form, BackgroundTasks
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import Response as StarletteResponse, FileResponse
+from starlette.middleware.gzip import GZipMiddleware
+from starlette.responses import Response as StarletteResponse, FileResponse, JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict, EmailStr
 from bson import ObjectId
@@ -63,6 +65,8 @@ storage_key = None
 EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME") or "Central de Serviços"
+DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
+DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
 
 STATUS_LABELS = {
     "aberto": "Aberto",
@@ -81,6 +85,54 @@ def _validate_object_id(v):
     return str(v)
 
 PyObjectId = Annotated[str, BeforeValidator(_validate_object_id)]
+
+MIN_PASSWORD_LENGTH = 8
+
+
+def as_object_id(value: str, detail: str = "Recurso não encontrado") -> ObjectId:
+    try:
+        return ObjectId(str(value))
+    except Exception:
+        raise HTTPException(status_code=404, detail=detail)
+
+
+def get_client_ip(request: Request) -> str:
+    """Return a stable client IP behind Render/Cloudflare proxies."""
+    candidates = [
+        request.headers.get("cf-connecting-ip"),
+        (request.headers.get("x-forwarded-for") or "").split(",")[0].strip(),
+        request.client.host if request.client else "",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            return str(ipaddress.ip_address(candidate.strip()))
+        except ValueError:
+            continue
+    return "unknown"
+
+
+async def enforce_rate_limit(request: Request, scope: str, limit: int, minutes: int = 1) -> None:
+    """Small Mongo-backed limiter for unauthenticated, abuse-prone endpoints."""
+    ip = get_client_ip(request)
+    now = datetime.now(timezone.utc)
+    bucket = int(now.timestamp() // max(60, minutes * 60))
+    key = hashlib.sha256(f"{scope}:{ip}:{bucket}".encode()).hexdigest()
+    doc = await db.rate_limits.find_one_and_update(
+        {"_id": key},
+        {
+            "$inc": {"count": 1},
+            "$setOnInsert": {
+                "scope": scope,
+                "expires_at": now + timedelta(minutes=max(2, minutes * 2)),
+            },
+        },
+        upsert=True,
+        return_document=True,
+    )
+    if doc and int(doc.get("count", 0)) > limit:
+        raise HTTPException(status_code=429, detail="Muitas solicitações. Aguarde um pouco e tente novamente.")
 
 
 class BaseDocument(BaseModel):
@@ -155,7 +207,7 @@ async def get_current_user(request: Request) -> dict:
         payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
         if payload.get("type") != "access":
             raise HTTPException(status_code=401, detail="Tipo de token inválido")
-        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+        user = await db.users.find_one({"_id": as_object_id(payload["sub"], "Sessão inválida")})
         if not user:
             raise HTTPException(status_code=401, detail="Usuário não encontrado")
         if payload.get("ver", 0) != user.get("token_version", 0):
@@ -175,11 +227,41 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
+async def validate_category_ids(category_ids: List[str]) -> List[str]:
+    normalized = list(dict.fromkeys(str(value) for value in (category_ids or [])))
+    if not normalized:
+        return []
+    if any(not ObjectId.is_valid(value) for value in normalized):
+        raise HTTPException(status_code=400, detail="Uma das categorias informadas é inválida")
+    object_ids = [ObjectId(value) for value in normalized]
+    found = await db.categories.count_documents({"_id": {"$in": object_ids}})
+    if found != len(object_ids):
+        raise HTTPException(status_code=400, detail="Uma das categorias informadas não existe")
+    return normalized
+
+
 def scope_match(user: dict) -> dict:
     """Empty for admins; category filter for scoped responsáveis."""
     if user.get("role") == "admin":
         return {}
     return {"category_id": {"$in": user.get("categories", []) or []}}
+
+
+async def write_audit(user: dict, action: str, entity_type: str, entity_id: str, details: Optional[dict] = None):
+    """Best-effort audit trail. Never store credentials or raw secrets here."""
+    try:
+        await db.audit_logs.insert_one({
+            "actor_id": str(user.get("_id", "")),
+            "actor_email": user.get("email", ""),
+            "actor_name": user.get("name", ""),
+            "action": action,
+            "entity_type": entity_type,
+            "entity_id": str(entity_id),
+            "details": details or {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as exc:
+        logger.warning("Falha ao registrar auditoria (%s): %s", action, exc)
 
 
 # ----------------------------------------------------------------------------
@@ -194,53 +276,75 @@ def _safe_local_path(path: str) -> Path:
     return target
 
 
-def init_storage(force: bool = False):
+async def init_storage(force: bool = False):
     """Use Emergent object storage when configured; otherwise use local disk."""
     global storage_key
     if not EMERGENT_KEY:
         return None
     if storage_key and not force:
         return storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    async with httpx.AsyncClient(timeout=30) as http:
+        resp = await http.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY})
     resp.raise_for_status()
     storage_key = resp.json()["storage_key"]
     return storage_key
 
 
-def put_object(path: str, data: bytes, content_type: str) -> dict:
-    if not EMERGENT_KEY:
-        target = _safe_local_path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-        return {"path": path, "storage": "local"}
+async def put_object(path: str, data: bytes, content_type: str) -> dict:
+    try:
+        if not EMERGENT_KEY:
+            target = _safe_local_path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(target.write_bytes, data)
+            return {"path": path, "storage": "local", "size": len(data)}
 
-    key = init_storage()
-    resp = requests.put(f"{STORAGE_URL}/objects/{path}",
-                        headers={"X-Storage-Key": key, "Content-Type": content_type},
-                        data=data, timeout=120)
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.put(f"{STORAGE_URL}/objects/{path}",
-                            headers={"X-Storage-Key": key, "Content-Type": content_type},
-                            data=data, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
+        key = await init_storage()
+        async with httpx.AsyncClient(timeout=120) as http:
+            resp = await http.put(
+                f"{STORAGE_URL}/objects/{path}",
+                headers={"X-Storage-Key": key, "Content-Type": content_type},
+                content=data,
+            )
+            if resp.status_code == 404:
+                key = await init_storage(force=True)
+                resp = await http.put(
+                    f"{STORAGE_URL}/objects/{path}",
+                    headers={"X-Storage-Key": key, "Content-Type": content_type},
+                    content=data,
+                )
+        resp.raise_for_status()
+        return resp.json()
+    except HTTPException:
+        raise
+    except (OSError, httpx.HTTPError, KeyError, ValueError) as exc:
+        logger.error("Falha ao armazenar arquivo: %s", exc)
+        raise HTTPException(status_code=503, detail="Não foi possível armazenar o arquivo agora. Tente novamente.")
 
 
-def get_object(path: str):
-    if not EMERGENT_KEY:
-        target = _safe_local_path(path)
-        if not target.exists() or not target.is_file():
+async def get_object(path: str):
+    try:
+        if not EMERGENT_KEY:
+            target = _safe_local_path(path)
+            if not target.exists() or not target.is_file():
+                raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+            data = await asyncio.to_thread(target.read_bytes)
+            return data, "application/octet-stream"
+
+        key = await init_storage()
+        async with httpx.AsyncClient(timeout=60) as http:
+            resp = await http.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key})
+            if resp.status_code == 404:
+                key = await init_storage(force=True)
+                resp = await http.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key})
+        if resp.status_code == 404:
             raise HTTPException(status_code=404, detail="Arquivo não encontrado")
-        return target.read_bytes(), "application/octet-stream"
-
-    key = init_storage()
-    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+        resp.raise_for_status()
+        return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+    except HTTPException:
+        raise
+    except (OSError, httpx.HTTPError, KeyError, ValueError) as exc:
+        logger.error("Falha ao recuperar arquivo: %s", exc)
+        raise HTTPException(status_code=503, detail="Não foi possível acessar o arquivo agora. Tente novamente.")
 
 
 # ----------------------------------------------------------------------------
@@ -447,44 +551,44 @@ class ResetInput(BaseModel):
 
 
 class UserCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=120)
     email: EmailStr
-    password: Optional[str] = None
-    role: str = "responsavel"
-    categories: List[str] = []
+    password: Optional[str] = Field(default=None, max_length=256)
+    role: Literal["admin", "responsavel"] = "responsavel"
+    categories: List[str] = Field(default_factory=list, max_length=200)
     send_welcome: bool = True
 
 
 class UserUpdate(BaseModel):
-    name: Optional[str] = None
-    role: Optional[str] = None
-    password: Optional[str] = None
-    categories: Optional[List[str]] = None
+    name: Optional[str] = Field(default=None, max_length=120)
+    role: Optional[Literal["admin", "responsavel"]] = None
+    password: Optional[str] = Field(default=None, max_length=256)
+    categories: Optional[List[str]] = Field(default=None, max_length=200)
 
 
 class CustomField(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    label: str
-    type: str  # text, textarea, select, date, checkbox, number
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), max_length=80)
+    label: str = Field(min_length=1, max_length=160)
+    type: Literal["text", "textarea", "select", "number", "date", "checkbox"]
     required: bool = False
-    options: List[str] = []
+    options: List[str] = Field(default_factory=list, max_length=100)
 
 
 class CategoryInput(BaseModel):
-    name: str
-    icon: str = "Laptop"
-    description: str = ""
-    lead_time_hours: int = 24
-    owners: List[str] = []
-    fields: List[CustomField] = []
-    template_columns: List[str] = []
-    template_filename: Optional[str] = None
+    name: str = Field(min_length=1, max_length=120)
+    icon: str = Field(default="Laptop", max_length=80)
+    description: str = Field(default="", max_length=1200)
+    lead_time_hours: int = Field(default=24, ge=1, le=720)
+    owners: List[EmailStr] = Field(default_factory=list, max_length=100)
+    fields: List[CustomField] = Field(default_factory=list, max_length=100)
+    template_columns: List[str] = Field(default_factory=list, max_length=100)
+    template_filename: Optional[str] = Field(default=None, max_length=180)
     active: bool = True
 
 
 class StatusUpdate(BaseModel):
-    status: str
-    note: Optional[str] = None
+    status: Literal["aberto", "em_analise", "em_andamento", "concluido", "cancelado"]
+    note: Optional[str] = Field(default=None, max_length=1000)
 
 
 # ----------------------------------------------------------------------------
@@ -496,11 +600,28 @@ def ser_category(doc: dict) -> dict:
     return doc
 
 
+def ser_category_public(doc: dict) -> dict:
+    """Public category shape. Internal routing e-mails must never leave the admin API."""
+    data = ser_category(doc)
+    data.pop("owners", None)
+    return data
+
+
 def ser_ticket(doc: dict) -> dict:
     doc = dict(doc)
     doc["id"] = str(doc.pop("_id"))
     doc["status_label"] = STATUS_LABELS.get(doc.get("status"), doc.get("status"))
     return doc
+
+
+def ser_ticket_public(doc: dict) -> dict:
+    """Minimal ticket shape used by the unauthenticated tracking screen."""
+    data = ser_ticket(doc)
+    allowed = {
+        "id", "ticket_number", "category_name", "category_icon", "status",
+        "status_label", "lead_time_hours", "created_at", "due_at",
+    }
+    return {key: value for key, value in data.items() if key in allowed}
 
 
 def ser_user(doc: dict) -> dict:
@@ -524,7 +645,7 @@ LOCKOUT_MINUTES = 15
 @api_router.post("/auth/login")
 async def login(payload: LoginInput, request: Request, response: Response):
     email = payload.email.lower().strip()
-    ip = request.client.host if request.client else "unknown"
+    ip = get_client_ip(request)
     identifier = f"{ip}:{email}"
     window = datetime.now(timezone.utc) - timedelta(minutes=LOCKOUT_MINUTES)
     recent = await db.login_attempts.count_documents(
@@ -534,8 +655,14 @@ async def login(payload: LoginInput, request: Request, response: Response):
 
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(payload.password, user["password_hash"]):
+        now = datetime.now(timezone.utc)
         await db.login_attempts.insert_one(
-            {"identifier": identifier, "email": email, "at": datetime.now(timezone.utc).isoformat()})
+            {
+                "identifier": identifier,
+                "email": email,
+                "at": now.isoformat(),
+                "expires_at": now + timedelta(minutes=LOCKOUT_MINUTES * 2),
+            })
         raise HTTPException(status_code=401, detail="E-mail ou senha inválidos")
 
     await db.login_attempts.delete_many({"identifier": identifier})
@@ -569,20 +696,26 @@ async def create_user(payload: UserCreate, background_tasks: BackgroundTasks, us
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="E-mail já cadastrado")
     if payload.password:
-        if len(payload.password) < 6:
-            raise HTTPException(status_code=400, detail="A senha deve ter ao menos 6 caracteres")
+        if len(payload.password) < MIN_PASSWORD_LENGTH:
+            raise HTTPException(status_code=400, detail=f"A senha deve ter ao menos {MIN_PASSWORD_LENGTH} caracteres")
         pw_hash = hash_password(payload.password)
     else:
         pw_hash = hash_password(secrets.token_urlsafe(16))
     role = payload.role if payload.role in ("admin", "responsavel") else "responsavel"
+    categories = [] if role == "admin" else await validate_category_ids(payload.categories)
     doc = {
         "email": email, "password_hash": pw_hash,
         "name": payload.name.strip() or "Responsável", "role": role,
-        "categories": payload.categories or [],
+        "categories": categories,
         "token_version": 0, "created_at": datetime.now(timezone.utc).isoformat(),
     }
     res = await db.users.insert_one(doc)
     doc["_id"] = res.inserted_id
+    await write_audit(user, "user.create", "user", str(res.inserted_id), {
+        "email": email,
+        "role": role,
+        "categories_count": len(doc.get("categories") or []),
+    })
     if payload.send_welcome:
         token = secrets.token_urlsafe(32)
         await db.password_reset_tokens.insert_one({
@@ -590,6 +723,7 @@ async def create_user(payload: UserCreate, background_tasks: BackgroundTasks, us
             "user_id": str(res.inserted_id), "email": email,
             "expires_at": (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(),
             "used": False, "created_at": datetime.now(timezone.utc).isoformat(),
+            "purge_at": datetime.now(timezone.utc) + timedelta(hours=72),
         })
         background_tasks.add_task(send_welcome_email, email, doc["name"], token)
     return ser_user(doc)
@@ -597,20 +731,36 @@ async def create_user(payload: UserCreate, background_tasks: BackgroundTasks, us
 
 @api_router.put("/users/{uid}")
 async def update_user(uid: str, payload: UserUpdate, user: dict = Depends(require_admin)):
-    target = await db.users.find_one({"_id": ObjectId(uid)})
+    oid = as_object_id(uid, "Usuário não encontrado")
+    target = await db.users.find_one({"_id": oid})
     if not target:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
     updates = {}
     if payload.name is not None:
-        updates["name"] = payload.name.strip()
-    if payload.role is not None and payload.role in ("admin", "responsavel"):
-        updates["role"] = payload.role
-    if payload.categories is not None:
-        updates["categories"] = payload.categories
+        cleaned_name = payload.name.strip()
+        if not cleaned_name:
+            raise HTTPException(status_code=400, detail="O nome do usuário é obrigatório")
+        updates["name"] = cleaned_name
+
+    next_role = payload.role or target.get("role", "responsavel")
+    if target.get("role") == "admin" and next_role != "admin":
+        admin_count = await db.users.count_documents({"role": "admin"})
+        if admin_count <= 1:
+            raise HTTPException(status_code=400, detail="Deve existir ao menos um administrador")
+
+    if payload.role is not None:
+        updates["role"] = next_role
+
+    if next_role == "admin":
+        if payload.categories is not None or payload.role == "admin":
+            updates["categories"] = []
+    elif payload.categories is not None:
+        updates["categories"] = await validate_category_ids(payload.categories)
+
     inc = {}
     if payload.password:
-        if len(payload.password) < 6:
-            raise HTTPException(status_code=400, detail="A senha deve ter ao menos 6 caracteres")
+        if len(payload.password) < MIN_PASSWORD_LENGTH:
+            raise HTTPException(status_code=400, detail=f"A senha deve ter ao menos {MIN_PASSWORD_LENGTH} caracteres")
         updates["password_hash"] = hash_password(payload.password)
         inc["token_version"] = 1
     if updates or inc:
@@ -619,18 +769,33 @@ async def update_user(uid: str, payload: UserUpdate, user: dict = Depends(requir
             op["$set"] = updates
         if inc:
             op["$inc"] = inc
-        await db.users.update_one({"_id": ObjectId(uid)}, op)
-    updated = await db.users.find_one({"_id": ObjectId(uid)})
+        await db.users.update_one({"_id": oid}, op)
+    updated = await db.users.find_one({"_id": oid})
+    await write_audit(user, "user.update", "user", uid, {
+        "email": updated.get("email", ""),
+        "role": updated.get("role", ""),
+        "categories_count": len(updated.get("categories") or []),
+        "password_changed": bool(payload.password),
+    })
     return ser_user(updated)
 
 
 @api_router.delete("/users/{uid}")
 async def delete_user(uid: str, user: dict = Depends(require_admin)):
+    oid = as_object_id(uid, "Usuário não encontrado")
     if str(user["_id"]) == uid:
         raise HTTPException(status_code=400, detail="Você não pode remover seu próprio usuário")
     if await db.users.count_documents({}) <= 1:
         raise HTTPException(status_code=400, detail="Deve existir ao menos um usuário")
-    await db.users.delete_one({"_id": ObjectId(uid)})
+    if target.get("role") == "admin":
+        admin_count = await db.users.count_documents({"role": "admin"})
+        if admin_count <= 1:
+            raise HTTPException(status_code=400, detail="Deve existir ao menos um administrador")
+    await db.users.delete_one({"_id": oid})
+    await write_audit(user, "user.delete", "user", uid, {
+        "email": target.get("email", ""),
+        "name": target.get("name", ""),
+    })
     return {"message": "Usuário removido"}
 
 
@@ -643,7 +808,7 @@ async def refresh(request: Request, response: Response):
         payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
         if payload.get("type") != "refresh":
             raise HTTPException(status_code=401, detail="Tipo de token inválido")
-        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+        user = await db.users.find_one({"_id": as_object_id(payload["sub"], "Sessão inválida")})
         if not user or payload.get("ver", 0) != user.get("token_version", 0):
             raise HTTPException(status_code=401, detail="Sessão expirada")
         uid = str(user["_id"])
@@ -659,10 +824,15 @@ GENERIC_RESET_MSG = {"message": "Se este e-mail estiver cadastrado, enviaremos u
 
 
 @api_router.post("/auth/forgot-password")
-async def forgot_password(payload: ForgotInput, background_tasks: BackgroundTasks):
+async def forgot_password(payload: ForgotInput, request: Request, background_tasks: BackgroundTasks):
+    await enforce_rate_limit(request, "forgot-password", limit=5, minutes=15)
     email = payload.email.lower().strip()
     now = datetime.now(timezone.utc)
-    await db.password_reset_requests.insert_one({"email": email, "created_at": now.isoformat()})
+    await db.password_reset_requests.insert_one({
+        "email": email,
+        "created_at": now.isoformat(),
+        "expires_at": now + timedelta(hours=24),
+    })
     window = (now - timedelta(minutes=15)).isoformat()
     recent = await db.password_reset_requests.count_documents(
         {"email": email, "created_at": {"$gt": window}})
@@ -677,6 +847,7 @@ async def forgot_password(payload: ForgotInput, background_tasks: BackgroundTask
         "token_hash": token_hash, "user_id": str(user["_id"]), "email": email,
         "expires_at": (now + timedelta(hours=1)).isoformat(), "used": False,
         "created_at": now.isoformat(),
+        "purge_at": now + timedelta(hours=24),
     })
     background_tasks.add_task(send_password_reset_email, user["email"], token)
     return GENERIC_RESET_MSG
@@ -684,8 +855,8 @@ async def forgot_password(payload: ForgotInput, background_tasks: BackgroundTask
 
 @api_router.post("/auth/reset-password")
 async def reset_password(payload: ResetInput):
-    if len(payload.password) < 6:
-        raise HTTPException(status_code=400, detail="A senha deve ter ao menos 6 caracteres")
+    if len(payload.password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"A senha deve ter ao menos {MIN_PASSWORD_LENGTH} caracteres")
     now_iso = datetime.now(timezone.utc).isoformat()
     h = hashlib.sha256(payload.token.encode()).hexdigest()
     doc = await db.password_reset_tokens.find_one_and_update(
@@ -694,7 +865,7 @@ async def reset_password(payload: ResetInput):
     if not doc:
         raise HTTPException(status_code=400, detail="Link inválido, expirado ou já utilizado")
     await db.users.update_one(
-        {"_id": ObjectId(doc["user_id"])},
+        {"_id": as_object_id(doc["user_id"], "Usuário não encontrado")},
         {"$set": {"password_hash": hash_password(payload.password)}, "$inc": {"token_version": 1}})
     await db.password_reset_tokens.delete_many({"user_id": doc["user_id"], "used": False})
     await db.login_attempts.delete_many({"email": doc["email"]})
@@ -705,23 +876,49 @@ async def reset_password(payload: ResetInput):
 # Category endpoints
 # ----------------------------------------------------------------------------
 @api_router.get("/categories")
-async def list_categories(all: bool = False):
-    query = {} if all else {"active": True}
-    docs = await db.categories.find(query).sort("created_at", 1).to_list(200)
-    return [ser_category(d) for d in docs]
+async def list_categories(request: Request, all: bool = False):
+    if all:
+        user = await get_current_user(request)
+        if user.get("role") == "admin":
+            docs = await db.categories.find({}).sort("created_at", 1).to_list(200)
+            return [ser_category(d) for d in docs]
+
+        assigned_ids = [
+            ObjectId(value)
+            for value in (user.get("categories") or [])
+            if ObjectId.is_valid(str(value))
+        ]
+        if not assigned_ids:
+            return []
+        docs = await db.categories.find({
+            "_id": {"$in": assigned_ids},
+            "active": True,
+        }).sort("created_at", 1).to_list(200)
+        return [ser_category_public(d) for d in docs]
+
+    docs = await db.categories.find({"active": True}).sort("created_at", 1).to_list(200)
+    return [ser_category_public(d) for d in docs]
 
 
 @api_router.get("/categories/{cat_id}")
 async def get_category(cat_id: str):
-    doc = await db.categories.find_one({"_id": ObjectId(cat_id)})
+    try:
+        oid = ObjectId(cat_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    doc = await db.categories.find_one({"_id": oid, "active": True})
     if not doc:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
-    return ser_category(doc)
+    return ser_category_public(doc)
 
 
 @api_router.get("/categories/{cat_id}/template")
 async def category_template(cat_id: str):
-    doc = await db.categories.find_one({"_id": ObjectId(cat_id)})
+    try:
+        oid = ObjectId(cat_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Modelo não disponível")
+    doc = await db.categories.find_one({"_id": oid, "active": True})
     cols = (doc or {}).get("template_columns") or []
     if not doc or not cols:
         raise HTTPException(status_code=404, detail="Modelo não disponível")
@@ -737,36 +934,73 @@ async def category_template(cat_id: str):
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
-    fname = doc.get("template_filename") or "modelo.xlsx"
+    fname = os.path.basename(doc.get("template_filename") or "modelo.xlsx").replace("\r", "").replace("\n", "").replace('"', "")
     return StarletteResponse(
         content=buf.read(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                 "X-Content-Type-Options": "nosniff"},
     )
 
 
 @api_router.post("/categories")
 async def create_category(payload: CategoryInput, user: dict = Depends(require_admin)):
+    normalized_name = payload.name.strip()
+    duplicate = await db.categories.find_one({
+        "name": {"$regex": f"^{re.escape(normalized_name)}$", "$options": "i"}
+    })
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Já existe uma categoria com este nome")
     doc = payload.model_dump()
+    doc["name"] = normalized_name
+    doc["owners"] = [str(owner).lower() for owner in payload.owners]
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
     res = await db.categories.insert_one(doc)
     doc["_id"] = res.inserted_id
+    await write_audit(user, "category.create", "category", str(res.inserted_id), {
+        "name": normalized_name,
+        "active": doc.get("active", True),
+    })
     return ser_category(doc)
 
 
 @api_router.put("/categories/{cat_id}")
 async def update_category(cat_id: str, payload: CategoryInput, user: dict = Depends(require_admin)):
+    oid = as_object_id(cat_id, "Categoria não encontrada")
+    normalized_name = payload.name.strip()
+    duplicate = await db.categories.find_one({
+        "_id": {"$ne": oid},
+        "name": {"$regex": f"^{re.escape(normalized_name)}$", "$options": "i"},
+    })
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Já existe uma categoria com este nome")
     doc = payload.model_dump()
-    res = await db.categories.update_one({"_id": ObjectId(cat_id)}, {"$set": doc})
+    doc["name"] = normalized_name
+    doc["owners"] = [str(owner).lower() for owner in payload.owners]
+    res = await db.categories.update_one({"_id": oid}, {"$set": doc})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
-    updated = await db.categories.find_one({"_id": ObjectId(cat_id)})
+    updated = await db.categories.find_one({"_id": oid})
+    await write_audit(user, "category.update", "category", cat_id, {
+        "name": updated.get("name", ""),
+        "active": updated.get("active", True),
+    })
     return ser_category(updated)
 
 
 @api_router.delete("/categories/{cat_id}")
 async def delete_category(cat_id: str, user: dict = Depends(require_admin)):
-    await db.categories.delete_one({"_id": ObjectId(cat_id)})
+    oid = as_object_id(cat_id, "Categoria não encontrada")
+    target = await db.categories.find_one({"_id": oid})
+    if not target:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    result = await db.categories.delete_one({"_id": oid})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    await db.users.update_many({}, {"$pull": {"categories": cat_id}})
+    await write_audit(user, "category.delete", "category", cat_id, {
+        "name": target.get("name", ""),
+    })
     return {"message": "Categoria removida"}
 
 
@@ -784,19 +1018,27 @@ async def next_ticket_number() -> str:
 
 @api_router.post("/tickets")
 async def create_ticket(
+    request: Request,
     background_tasks: BackgroundTasks,
     payload: str = Form(...),
     file: Optional[UploadFile] = File(None),
 ):
+    await enforce_rate_limit(request, "ticket-create", limit=10, minutes=1)
+    if len(payload.encode("utf-8")) > 256 * 1024:
+        raise HTTPException(status_code=413, detail="Solicitação muito grande")
     try:
         data = json.loads(payload)
     except Exception:
-        raise HTTPException(status_code=400, detail="Payload inválido")
+        raise HTTPException(status_code=400, detail="Dados da solicitação inválidos")
 
-    category_id = data.get("category_id")
+    category_id = str(data.get("category_id") or "").strip()
     if not category_id:
         raise HTTPException(status_code=400, detail="Categoria obrigatória")
-    category = await db.categories.find_one({"_id": ObjectId(category_id)})
+    try:
+        category_oid = ObjectId(category_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    category = await db.categories.find_one({"_id": category_oid, "active": True})
     if not category:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
 
@@ -804,6 +1046,25 @@ async def create_ticket(
     for field in ("matricula", "email", "empresa"):
         if not str(requester.get(field, "")).strip():
             raise HTTPException(status_code=400, detail=f"Campo obrigatório: {field}")
+    requester_email = str(requester.get("email", "")).strip().lower()
+    if len(requester_email) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", requester_email):
+        raise HTTPException(status_code=400, detail="Informe um e-mail válido")
+    if len(str(requester.get("matricula", ""))) > 80 or len(str(requester.get("empresa", ""))) > 160:
+        raise HTTPException(status_code=400, detail="Dados do solicitante excedem o limite permitido")
+
+    field_values = data.get("field_values") or {}
+    if not isinstance(field_values, dict) or len(field_values) > 100:
+        raise HTTPException(status_code=400, detail="Campos da solicitação inválidos")
+    for field in category.get("fields", []):
+        if not field.get("required"):
+            continue
+        value = field_values.get(field.get("label"))
+        missing = value is not True if field.get("type") == "checkbox" else not str(value or "").strip()
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Campo obrigatório: {field.get('label', 'campo')}")
+    for key, value in field_values.items():
+        if len(str(key)) > 160 or len(str(value)) > 10000:
+            raise HTTPException(status_code=400, detail="Um dos campos excede o limite permitido")
 
     file_ref = None
     if file is not None:
@@ -811,12 +1072,16 @@ async def create_ticket(
         if raw:
             if len(raw) > 10 * 1024 * 1024:
                 raise HTTPException(status_code=400, detail="Arquivo excede 10MB")
-            ext = file.filename.split(".")[-1] if file.filename and "." in file.filename else "bin"
+            safe_name = os.path.basename(file.filename or "arquivo").replace("\r", "").replace("\n", "")
+            ext = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
+            allowed_extensions = {"pdf", "png", "jpg", "jpeg", "doc", "docx", "xls", "xlsx", "csv", "txt"}
+            if ext not in allowed_extensions:
+                raise HTTPException(status_code=400, detail="Tipo de arquivo não permitido")
             path = f"{APP_NAME}/tickets/{uuid.uuid4()}.{ext}"
-            result = put_object(path, raw, file.content_type or "application/octet-stream")
+            result = await put_object(path, raw, file.content_type or "application/octet-stream")
             file_ref = {
                 "storage_path": result["path"],
-                "original_filename": file.filename,
+                "original_filename": safe_name,
                 "content_type": file.content_type or "application/octet-stream",
                 "size": result.get("size", len(raw)),
             }
@@ -834,7 +1099,7 @@ async def create_ticket(
             "email": requester["email"].strip().lower(),
             "empresa": requester["empresa"].strip(),
         },
-        "field_values": data.get("field_values", {}),
+        "field_values": field_values,
         "file": file_ref,
         "status": "aberto",
         "lead_time_hours": lead,
@@ -854,46 +1119,151 @@ async def create_ticket(
 
 
 @api_router.get("/tickets/track")
-async def track_ticket(q: str):
+async def track_ticket(q: str, request: Request):
+    await enforce_rate_limit(request, "ticket-track", limit=30, minutes=1)
     q = q.strip()
+    if not q or len(q) > 254:
+        return []
     query = {"$or": [
         {"ticket_number": q.upper()},
         {"requester.email": q.lower()},
         {"requester.matricula": q},
     ]}
     docs = await db.tickets.find(query).sort("created_at", -1).to_list(50)
-    return [ser_ticket(d) for d in docs]
+    return [ser_ticket_public(d) for d in docs]
 
 
-@api_router.get("/tickets")
-async def list_tickets(status: Optional[str] = None, category_id: Optional[str] = None,
-                       search: Optional[str] = None, user: dict = Depends(get_current_user)):
+def build_ticket_query(
+    user: dict,
+    status: Optional[str] = None,
+    category_id: Optional[str] = None,
+    search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict:
     query = {}
     if status and status != "all":
+        if status not in STATUS_LABELS:
+            raise HTTPException(status_code=400, detail="Status inválido")
         query["status"] = status
     if category_id and category_id != "all":
         query["category_id"] = category_id
     if search:
-        s = search.strip()
+        escaped = re.escape(search.strip()[:160])
         query["$or"] = [
-            {"ticket_number": {"$regex": s, "$options": "i"}},
-            {"requester.email": {"$regex": s, "$options": "i"}},
-            {"requester.matricula": {"$regex": s, "$options": "i"}},
-            {"requester.empresa": {"$regex": s, "$options": "i"}},
+            {"ticket_number": {"$regex": escaped, "$options": "i"}},
+            {"requester.email": {"$regex": escaped, "$options": "i"}},
+            {"requester.matricula": {"$regex": escaped, "$options": "i"}},
+            {"requester.empresa": {"$regex": escaped, "$options": "i"}},
         ]
+
+    if start_date or end_date:
+        created_range = {}
+        try:
+            if start_date:
+                start = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                created_range["$gte"] = start.isoformat()
+            if end_date:
+                end = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+                created_range["$lt"] = end.isoformat()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Período do relatório inválido")
+        query["created_at"] = created_range
+
     if user.get("role") != "admin":
         cats = user.get("categories", []) or []
         if category_id and category_id != "all" and category_id in cats:
             query["category_id"] = category_id
         else:
             query["category_id"] = {"$in": cats}
+    return query
+
+
+@api_router.get("/tickets")
+async def list_tickets(status: Optional[str] = None, category_id: Optional[str] = None,
+                       search: Optional[str] = None, start_date: Optional[str] = None,
+                       end_date: Optional[str] = None, page: int = 1, limit: int = 50,
+                       paginated: bool = False, user: dict = Depends(get_current_user)):
+    query = build_ticket_query(user, status, category_id, search, start_date, end_date)
+
+    if paginated:
+        safe_limit = min(max(limit, 10), 100)
+        safe_page = max(page, 1)
+        total = await db.tickets.count_documents(query)
+        docs = await (
+            db.tickets.find(query)
+            .sort("created_at", -1)
+            .skip((safe_page - 1) * safe_limit)
+            .limit(safe_limit)
+            .to_list(safe_limit)
+        )
+        pages = max(1, (total + safe_limit - 1) // safe_limit)
+        return {
+            "items": [ser_ticket(d) for d in docs],
+            "total": total,
+            "page": safe_page,
+            "limit": safe_limit,
+            "pages": pages,
+        }
+
     docs = await db.tickets.find(query).sort("created_at", -1).to_list(1000)
     return [ser_ticket(d) for d in docs]
 
 
+@api_router.get("/admin/reports/tickets.csv")
+async def export_ticket_report(
+    status: Optional[str] = None,
+    category_id: Optional[str] = None,
+    search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    query = build_ticket_query(user, status, category_id, search, start_date, end_date)
+    docs = await db.tickets.find(query).sort("created_at", -1).limit(10000).to_list(10000)
+
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Chamado", "Categoria", "Status", "Matrícula", "E-mail",
+        "Empresa", "Aberto em", "Prazo (h)", "Previsão"
+    ])
+    for doc in docs:
+        requester = doc.get("requester") or {}
+        writer.writerow([
+            doc.get("ticket_number", ""),
+            doc.get("category_name", ""),
+            STATUS_LABELS.get(doc.get("status"), doc.get("status", "")),
+            requester.get("matricula", ""),
+            requester.get("email", ""),
+            requester.get("empresa", ""),
+            doc.get("created_at", ""),
+            doc.get("lead_time_hours", ""),
+            doc.get("due_at", ""),
+        ])
+
+    await write_audit(user, "report.export", "report", "tickets", {
+        "rows": len(docs),
+        "status": status or "all",
+        "category_id": category_id or "all",
+        "start_date": start_date or "",
+        "end_date": end_date or "",
+    })
+    filename = f"relatorio-chamados-{datetime.now(timezone.utc).date().isoformat()}.csv"
+    return StarletteResponse(
+        content=output.getvalue().encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @api_router.get("/tickets/{ticket_id}")
 async def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
-    doc = await db.tickets.find_one({"_id": ObjectId(ticket_id)})
+    oid = as_object_id(ticket_id, "Chamado não encontrado")
+    doc = await db.tickets.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
     if user.get("role") != "admin" and doc.get("category_id") not in (user.get("categories") or []):
@@ -905,7 +1275,8 @@ async def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
 async def update_status(ticket_id: str, payload: StatusUpdate, user: dict = Depends(get_current_user)):
     if payload.status not in STATUS_LABELS:
         raise HTTPException(status_code=400, detail="Status inválido")
-    doc = await db.tickets.find_one({"_id": ObjectId(ticket_id)})
+    oid = as_object_id(ticket_id, "Chamado não encontrado")
+    doc = await db.tickets.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
     if user.get("role") != "admin" and doc.get("category_id") not in (user.get("categories") or []):
@@ -913,10 +1284,16 @@ async def update_status(ticket_id: str, payload: StatusUpdate, user: dict = Depe
     now = datetime.now(timezone.utc).isoformat()
     actor = user.get("name") or user.get("email")
     entry = {"status": payload.status, "at": now, "note": payload.note or "", "by": actor}
+    previous_status = doc.get("status")
     await db.tickets.update_one(
-        {"_id": ObjectId(ticket_id)},
+        {"_id": oid},
         {"$set": {"status": payload.status}, "$push": {"history": entry}})
-    doc = await db.tickets.find_one({"_id": ObjectId(ticket_id)})
+    doc = await db.tickets.find_one({"_id": oid})
+    await write_audit(user, "ticket.status", "ticket", ticket_id, {
+        "ticket_number": doc.get("ticket_number", ""),
+        "from": previous_status,
+        "to": payload.status,
+    })
     return ser_ticket(doc)
 
 
@@ -927,10 +1304,40 @@ async def download_file(path: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     if user.get("role") != "admin" and record.get("category_id") not in (user.get("categories") or []):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
-    data, content_type = get_object(path)
-    fname = record["file"].get("original_filename", "arquivo")
+    data, content_type = await get_object(path)
+    fname = os.path.basename(record["file"].get("original_filename", "arquivo")).replace("\r", "").replace("\n", "").replace('"', "")
     return StarletteResponse(content=data, media_type=record["file"].get("content_type", content_type),
-                             headers={"Content-Disposition": f'inline; filename="{fname}"'})
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                                      "X-Content-Type-Options": "nosniff"})
+
+
+# ----------------------------------------------------------------------------
+# Admin audit
+# ----------------------------------------------------------------------------
+@api_router.get("/admin/audit")
+async def admin_audit(page: int = 1, limit: int = 50, user: dict = Depends(require_admin)):
+    safe_limit = min(max(limit, 10), 100)
+    safe_page = max(page, 1)
+    total = await db.audit_logs.count_documents({})
+    docs = await (
+        db.audit_logs.find({})
+        .sort("created_at", -1)
+        .skip((safe_page - 1) * safe_limit)
+        .limit(safe_limit)
+        .to_list(safe_limit)
+    )
+    items = []
+    for doc in docs:
+        item = dict(doc)
+        item["id"] = str(item.pop("_id"))
+        items.append(item)
+    return {
+        "items": items,
+        "total": total,
+        "page": safe_page,
+        "pages": max(1, (total + safe_limit - 1) // safe_limit),
+        "limit": safe_limit,
+    }
 
 
 # ----------------------------------------------------------------------------
@@ -939,9 +1346,23 @@ async def download_file(path: str, user: dict = Depends(get_current_user)):
 @api_router.get("/admin/stats")
 async def admin_stats(user: dict = Depends(get_current_user)):
     match = scope_match(user)
+    active_statuses = ["aberto", "em_analise", "em_andamento"]
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    due_soon_iso = (now + timedelta(hours=6)).isoformat()
     total = await db.tickets.count_documents(match)
-    open_count = await db.tickets.count_documents({**match, "status": {"$in": ["aberto", "em_analise", "em_andamento"]}})
+    open_count = await db.tickets.count_documents({**match, "status": {"$in": active_statuses}})
     done = await db.tickets.count_documents({**match, "status": "concluido"})
+    overdue = await db.tickets.count_documents({
+        **match,
+        "status": {"$in": active_statuses},
+        "due_at": {"$lt": now_iso},
+    })
+    due_soon = await db.tickets.count_documents({
+        **match,
+        "status": {"$in": active_statuses},
+        "due_at": {"$gte": now_iso, "$lte": due_soon_iso},
+    })
     by_cat = await db.tickets.aggregate([
         {"$match": match},
         {"$group": {"_id": "$category_name", "count": {"$sum": 1}}},
@@ -951,10 +1372,40 @@ async def admin_stats(user: dict = Depends(get_current_user)):
         {"$match": match},
         {"$group": {"_id": "$status", "count": {"$sum": 1}}}
     ]).to_list(20)
+    recent_docs = await (
+        db.tickets.find(
+            match,
+            {
+                "ticket_number": 1,
+                "category_name": 1,
+                "category_icon": 1,
+                "status": 1,
+                "created_at": 1,
+            },
+        )
+        .sort("created_at", -1)
+        .limit(6)
+        .to_list(6)
+    )
+    recent = [
+        {
+            "id": str(item["_id"]),
+            "ticket_number": item.get("ticket_number", ""),
+            "category_name": item.get("category_name", ""),
+            "category_icon": item.get("category_icon", "CircleHelp"),
+            "status": item.get("status", "aberto"),
+            "status_label": STATUS_LABELS.get(item.get("status"), item.get("status")),
+            "created_at": item.get("created_at"),
+        }
+        for item in recent_docs
+    ]
     return {
         "total": total,
         "open": open_count,
         "done": done,
+        "overdue": overdue,
+        "due_soon": due_soon,
+        "recent": recent,
         "by_category": [{"name": c["_id"], "count": c["count"]} for c in by_cat],
         "by_status": [{"status": s["_id"], "label": STATUS_LABELS.get(s["_id"], s["_id"]), "count": s["count"]} for s in by_status],
     }
@@ -967,7 +1418,7 @@ DEFAULT_CATEGORIES = [
     {
         "name": "Informática & TI", "icon": "Laptop",
         "description": "Suporte a computadores, periféricos, softwares, rede e sistemas de TI",
-        "lead_time_hours": 4, "owners": ["matheus.cardosooliveira1@gmail.com"], "active": True,
+        "lead_time_hours": 4, "owners": DEFAULT_OWNERS, "active": True,
         "fields": [
             {"id": str(uuid.uuid4()), "label": "Tipo de problema", "type": "select", "required": True,
              "options": ["Hardware", "Software", "Rede/Internet", "Impressora", "E-mail", "Outro"]},
@@ -979,7 +1430,7 @@ DEFAULT_CATEGORIES = [
     {
         "name": "Acessos e Permissões", "icon": "KeyRound",
         "description": "Criação, alteração ou revogação de acessos a sistemas e pastas compartilhadas",
-        "lead_time_hours": 8, "owners": ["matheus.cardosooliveira1@gmail.com"], "active": True,
+        "lead_time_hours": 8, "owners": DEFAULT_OWNERS, "active": True,
         "fields": [
             {"id": str(uuid.uuid4()), "label": "Sistema / Recurso", "type": "text", "required": True, "options": []},
             {"id": str(uuid.uuid4()), "label": "Tipo de solicitação", "type": "select", "required": True,
@@ -990,7 +1441,7 @@ DEFAULT_CATEGORIES = [
     {
         "name": "Férias e RH", "icon": "CalendarCheck",
         "description": "Solicitação de agendamento, alteração ou dúvidas sobre férias e benefícios",
-        "lead_time_hours": 24, "owners": ["matheus.cardosooliveira1@gmail.com"], "active": True,
+        "lead_time_hours": 24, "owners": DEFAULT_OWNERS, "active": True,
         "fields": [
             {"id": str(uuid.uuid4()), "label": "Tipo de solicitação", "type": "select", "required": True,
              "options": ["Agendar férias", "Alterar férias", "Dúvida sobre benefícios"]},
@@ -1001,7 +1452,7 @@ DEFAULT_CATEGORIES = [
     {
         "name": "Criação de Centros", "icon": "Building2",
         "description": "Abertura de novos centros de custo, unidades operacionais ou projetos",
-        "lead_time_hours": 48, "owners": ["matheus.cardosooliveira1@gmail.com"], "active": True,
+        "lead_time_hours": 48, "owners": DEFAULT_OWNERS, "active": True,
         "template_columns": ["Endereço físico", "CNPJ", "Inscrição Estadual"],
         "template_filename": "modelo-criacao-centros.xlsx",
         "fields": [
@@ -1015,7 +1466,7 @@ DEFAULT_CATEGORIES = [
     {
         "name": "Reabastecimento", "icon": "PackagePlus",
         "description": "Solicitação de materiais de escritório, insumos de copa e suprimentos",
-        "lead_time_hours": 12, "owners": ["matheus.cardosooliveira1@gmail.com"], "active": True,
+        "lead_time_hours": 12, "owners": DEFAULT_OWNERS, "active": True,
         "fields": [
             {"id": str(uuid.uuid4()), "label": "Categoria do item", "type": "select", "required": True,
              "options": ["Material de escritório", "Copa/Cozinha", "Limpeza", "Suprimentos de TI"]},
@@ -1027,8 +1478,16 @@ DEFAULT_CATEGORIES = [
 
 
 async def seed_admin():
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    admin_email = (os.environ.get("ADMIN_EMAIL") or "").strip().lower()
+    admin_password = os.environ.get("ADMIN_PASSWORD") or ""
+    is_production = bool(os.environ.get("RENDER") or os.environ.get("ENVIRONMENT") == "production")
+    if not admin_email or not admin_password:
+        if is_production:
+            raise RuntimeError("ADMIN_EMAIL e ADMIN_PASSWORD devem ser configurados em produção")
+        admin_email = "admin@example.com"
+        admin_password = "dev-only-admin-password"
+    if len(admin_password) < 12 and is_production:
+        raise RuntimeError("ADMIN_PASSWORD deve ter ao menos 12 caracteres em produção")
     existing = await db.users.find_one({"email": admin_email})
     if existing is None:
         await db.users.insert_one({
@@ -1037,10 +1496,8 @@ async def seed_admin():
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Admin seeded")
-    elif not verify_password(admin_password, existing["password_hash"]):
-        await db.users.update_one({"email": admin_email},
-                                  {"$set": {"password_hash": hash_password(admin_password)}})
-        logger.info("Admin password updated")
+    else:
+        logger.info("Admin account already exists; bootstrap credentials were not reapplied")
 
 
 async def seed_categories():
@@ -1062,14 +1519,24 @@ async def startup():
         raise
     await db.users.create_index("email", unique=True)
     await db.login_attempts.create_index("identifier")
+    await db.login_attempts.create_index("expires_at", expireAfterSeconds=0)
+    await db.rate_limits.create_index("expires_at", expireAfterSeconds=0)
     await db.tickets.create_index("ticket_number", unique=True)
+    await db.tickets.create_index([("category_id", 1), ("created_at", -1)])
+    await db.tickets.create_index([("status", 1), ("created_at", -1)])
+    await db.tickets.create_index("requester.email")
+    await db.tickets.create_index("requester.matricula")
     await db.password_reset_tokens.create_index("token_hash", unique=True)
     await db.password_reset_tokens.create_index("email")
+    await db.password_reset_tokens.create_index("purge_at", expireAfterSeconds=0)
     await db.password_reset_requests.create_index("email")
+    await db.password_reset_requests.create_index("expires_at", expireAfterSeconds=0)
+    await db.audit_logs.create_index([("created_at", -1)])
+    await db.audit_logs.create_index([("actor_id", 1), ("created_at", -1)])
     await seed_admin()
     await seed_categories()
     try:
-        init_storage()
+        await init_storage()
         logger.info("Storage inicializado (%s)", "Emergent" if EMERGENT_KEY else f"local: {LOCAL_STORAGE_DIR}")
     except Exception as e:
         logger.warning("Storage remoto indisponível, usando disco local: %s", e)
@@ -1086,7 +1553,8 @@ async def health():
         await client.admin.command("ping")
         return {"status": "ok", "database": "connected"}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Banco indisponível: {e}")
+        logger.error("Health check falhou: %s", e)
+        raise HTTPException(status_code=503, detail="Serviço temporariamente indisponível")
 
 
 app.include_router(api_router)
@@ -1103,6 +1571,24 @@ allowed_origins = list(dict.fromkeys([
     *configured_origins,
 ]))
 
+
+@app.middleware("http")
+async def security_headers_and_origin_guard(request: Request, call_next):
+    unsafe_method = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    has_session_cookie = bool(request.cookies.get("access_token") or request.cookies.get("refresh_token"))
+    if request.url.path.startswith("/api/") and unsafe_method and has_session_cookie:
+        origin = (request.headers.get("origin") or "").rstrip("/")
+        if origin and origin not in allowed_origins:
+            return JSONResponse(status_code=403, content={"detail": "Origem da requisição não permitida"})
+
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    return response
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -1110,6 +1596,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 
 FRONTEND_BUILD_DIR = (ROOT_DIR.parent / "frontend" / "build").resolve()
 
@@ -1118,8 +1605,17 @@ if FRONTEND_BUILD_DIR.exists():
     async def serve_spa(full_path: str):
         requested = (FRONTEND_BUILD_DIR / full_path).resolve()
         if FRONTEND_BUILD_DIR in requested.parents and requested.is_file():
-            return FileResponse(requested)
-        return FileResponse(FRONTEND_BUILD_DIR / "index.html")
+            response = FileResponse(requested)
+            if "/static/" in requested.as_posix():
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            elif requested.name == "index.html":
+                response.headers["Cache-Control"] = "no-cache"
+            else:
+                response.headers["Cache-Control"] = "public, max-age=3600"
+            return response
+        response = FileResponse(FRONTEND_BUILD_DIR / "index.html")
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 @app.on_event("shutdown")
