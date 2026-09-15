@@ -79,6 +79,7 @@ BREVO_API_KEY = (os.environ.get("BREVO_API_KEY") or "").strip()
 BREVO_SENDER_EMAIL = (os.environ.get("BREVO_SENDER_EMAIL") or "").strip().lower()
 BREVO_SENDER_NAME = (os.environ.get("BREVO_SENDER_NAME") or EMAIL_FROM_NAME).strip()
 EMAIL_STATUS_SELF_TEST_TICKET_ID = (os.environ.get("EMAIL_STATUS_SELF_TEST_TICKET_ID") or "").strip()
+BREVO_WEBHOOK_SECRET = (os.environ.get("BREVO_WEBHOOK_SECRET") or "").strip()
 DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
 PRIMARY_NOTIFICATION_EMAIL = (os.environ.get("PRIMARY_NOTIFICATION_EMAIL") or DEFAULT_OWNER_EMAIL).strip().lower()
 DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
@@ -556,6 +557,49 @@ async def notify_owners(ticket: dict, owners: List[str]):
                     "at": datetime.now(timezone.utc).isoformat()})
     await db.tickets.update_one({"ticket_number": ticket["ticket_number"]},
                                 {"$set": {"email_log": log}})
+
+
+async def ensure_brevo_webhook() -> None:
+    if not BREVO_API_KEY or not BREVO_WEBHOOK_SECRET:
+        return
+    base = FRONTEND_URL.rstrip("/")
+    if not base.startswith("https://"):
+        return
+    webhook_url = f"{base}/api/email/brevo-webhook"
+    headers = {"api-key": BREVO_API_KEY, "accept": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client_http:
+            existing = await client_http.get(
+                "https://api.brevo.com/v3/webhooks",
+                headers=headers,
+                params={"type": "transactional", "sort": "desc"},
+            )
+            existing.raise_for_status()
+            hooks = existing.json().get("webhooks", [])
+            if any(hook.get("url") == webhook_url for hook in hooks):
+                logger.info("Brevo delivery webhook already configured")
+                return
+            payload = {
+                "url": webhook_url,
+                "description": "Gestão de Materiais - status de entrega",
+                "events": [
+                    "request", "delivered", "hardBounce", "softBounce",
+                    "blocked", "invalid", "deferred", "spam"
+                ],
+                "type": "transactional",
+                "headers": [
+                    {"key": "x-brevo-webhook-secret", "value": BREVO_WEBHOOK_SECRET}
+                ],
+            }
+            created = await client_http.post(
+                "https://api.brevo.com/v3/webhooks",
+                headers={**headers, "content-type": "application/json"},
+                json=payload,
+            )
+            created.raise_for_status()
+            logger.info("Brevo delivery webhook configured")
+    except Exception as exc:
+        logger.error("Brevo webhook setup error: %s: %s", type(exc).__name__, str(exc)[:240])
 
 
 async def send_ticket_opened_email(ticket: dict) -> bool:
@@ -1309,6 +1353,44 @@ async def create_ticket(
     return ser_ticket(ticket)
 
 
+@api_router.post("/email/brevo-webhook")
+async def brevo_email_webhook(request: Request):
+    if not BREVO_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Webhook não configurado")
+    supplied = request.headers.get("x-brevo-webhook-secret") or ""
+    if not secrets.compare_digest(supplied, BREVO_WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="Webhook não autorizado")
+    payload = await request.json()
+    events = payload if isinstance(payload, list) else [payload]
+    now = datetime.now(timezone.utc).isoformat()
+    stored = 0
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        email = str(event.get("email") or "").strip().lower()
+        event_name = str(event.get("event") or "").strip()
+        message_id = str(event.get("message-id") or event.get("messageId") or "").strip()
+        doc = {
+            "provider": "brevo",
+            "event": event_name,
+            "email": email,
+            "message_id": message_id,
+            "subject": str(event.get("subject") or ""),
+            "reason": str(event.get("reason") or ""),
+            "raw_date": str(event.get("date") or ""),
+            "received_at": now,
+        }
+        await db.email_events.insert_one(doc)
+        stored += 1
+        logger.info(
+            "Brevo delivery event=%s email=%s message_id=%s",
+            event_name or "unknown",
+            email or "unknown",
+            message_id or "unknown",
+        )
+    return {"ok": True, "stored": stored}
+
+
 @api_router.get("/tickets/track")
 async def track_ticket(q: str, request: Request):
     await enforce_rate_limit(request, "ticket-track", limit=30, minutes=1)
@@ -1785,9 +1867,12 @@ async def startup():
     await db.password_reset_requests.create_index("expires_at", expireAfterSeconds=0)
     await db.audit_logs.create_index([("created_at", -1)])
     await db.audit_logs.create_index([("actor_id", 1), ("created_at", -1)])
+    await db.email_events.create_index([("email", 1), ("received_at", -1)])
+    await db.email_events.create_index([("message_id", 1), ("received_at", -1)])
     await seed_admin()
     await seed_categories()
     logger.info("Email delivery configured: %s", "yes" if email_delivery_configured() else "no")
+    await ensure_brevo_webhook()
     if EMAIL_STATUS_SELF_TEST_TICKET_ID and ObjectId.is_valid(EMAIL_STATUS_SELF_TEST_TICKET_ID):
         test_oid = ObjectId(EMAIL_STATUS_SELF_TEST_TICKET_ID)
         test_ticket = await db.tickets.find_one({
