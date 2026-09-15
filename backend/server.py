@@ -7,6 +7,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 import logging
 import asyncio
+import csv
 import uuid
 import json
 import random
@@ -19,7 +20,7 @@ from typing import List, Optional, Annotated, Literal
 from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urlparse
-from io import BytesIO
+from io import BytesIO, StringIO
 
 import bcrypt
 from openpyxl import Workbook
@@ -1098,29 +1099,58 @@ async def track_ticket(q: str, request: Request):
     return [ser_ticket_public(d) for d in docs]
 
 
-@api_router.get("/tickets")
-async def list_tickets(status: Optional[str] = None, category_id: Optional[str] = None,
-                       search: Optional[str] = None, page: int = 1, limit: int = 50,
-                       paginated: bool = False, user: dict = Depends(get_current_user)):
+def build_ticket_query(
+    user: dict,
+    status: Optional[str] = None,
+    category_id: Optional[str] = None,
+    search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> dict:
     query = {}
     if status and status != "all":
+        if status not in STATUS_LABELS:
+            raise HTTPException(status_code=400, detail="Status inválido")
         query["status"] = status
     if category_id and category_id != "all":
         query["category_id"] = category_id
     if search:
-        s = re.escape(search.strip()[:160])
+        escaped = re.escape(search.strip()[:160])
         query["$or"] = [
-            {"ticket_number": {"$regex": s, "$options": "i"}},
-            {"requester.email": {"$regex": s, "$options": "i"}},
-            {"requester.matricula": {"$regex": s, "$options": "i"}},
-            {"requester.empresa": {"$regex": s, "$options": "i"}},
+            {"ticket_number": {"$regex": escaped, "$options": "i"}},
+            {"requester.email": {"$regex": escaped, "$options": "i"}},
+            {"requester.matricula": {"$regex": escaped, "$options": "i"}},
+            {"requester.empresa": {"$regex": escaped, "$options": "i"}},
         ]
+
+    if start_date or end_date:
+        created_range = {}
+        try:
+            if start_date:
+                start = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                created_range["$gte"] = start.isoformat()
+            if end_date:
+                end = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+                created_range["$lt"] = end.isoformat()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Período do relatório inválido")
+        query["created_at"] = created_range
+
     if user.get("role") != "admin":
         cats = user.get("categories", []) or []
         if category_id and category_id != "all" and category_id in cats:
             query["category_id"] = category_id
         else:
             query["category_id"] = {"$in": cats}
+    return query
+
+
+@api_router.get("/tickets")
+async def list_tickets(status: Optional[str] = None, category_id: Optional[str] = None,
+                       search: Optional[str] = None, start_date: Optional[str] = None,
+                       end_date: Optional[str] = None, page: int = 1, limit: int = 50,
+                       paginated: bool = False, user: dict = Depends(get_current_user)):
+    query = build_ticket_query(user, status, category_id, search, start_date, end_date)
 
     if paginated:
         safe_limit = min(max(limit, 10), 100)
@@ -1144,6 +1174,56 @@ async def list_tickets(status: Optional[str] = None, category_id: Optional[str] 
 
     docs = await db.tickets.find(query).sort("created_at", -1).to_list(1000)
     return [ser_ticket(d) for d in docs]
+
+
+@api_router.get("/admin/reports/tickets.csv")
+async def export_ticket_report(
+    status: Optional[str] = None,
+    category_id: Optional[str] = None,
+    search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    query = build_ticket_query(user, status, category_id, search, start_date, end_date)
+    docs = await db.tickets.find(query).sort("created_at", -1).limit(10000).to_list(10000)
+
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Chamado", "Categoria", "Status", "Matrícula", "E-mail",
+        "Empresa", "Aberto em", "Prazo (h)", "Previsão"
+    ])
+    for doc in docs:
+        requester = doc.get("requester") or {}
+        writer.writerow([
+            doc.get("ticket_number", ""),
+            doc.get("category_name", ""),
+            STATUS_LABELS.get(doc.get("status"), doc.get("status", "")),
+            requester.get("matricula", ""),
+            requester.get("email", ""),
+            requester.get("empresa", ""),
+            doc.get("created_at", ""),
+            doc.get("lead_time_hours", ""),
+            doc.get("due_at", ""),
+        ])
+
+    await write_audit(user, "report.export", "report", "tickets", {
+        "rows": len(docs),
+        "status": status or "all",
+        "category_id": category_id or "all",
+        "start_date": start_date or "",
+        "end_date": end_date or "",
+    })
+    filename = f"relatorio-chamados-{datetime.now(timezone.utc).date().isoformat()}.csv"
+    return StarletteResponse(
+        content=output.getvalue().encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @api_router.get("/tickets/{ticket_id}")
