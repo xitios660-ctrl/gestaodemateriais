@@ -84,6 +84,37 @@ def _validate_object_id(v):
 
 PyObjectId = Annotated[str, BeforeValidator(_validate_object_id)]
 
+MIN_PASSWORD_LENGTH = 8
+
+
+def as_object_id(value: str, detail: str = "Recurso não encontrado") -> ObjectId:
+    try:
+        return ObjectId(str(value))
+    except Exception:
+        raise HTTPException(status_code=404, detail=detail)
+
+
+async def enforce_rate_limit(request: Request, scope: str, limit: int, minutes: int = 1) -> None:
+    """Small Mongo-backed limiter for unauthenticated, abuse-prone endpoints."""
+    ip = request.client.host if request.client else "unknown"
+    now = datetime.now(timezone.utc)
+    bucket = int(now.timestamp() // max(60, minutes * 60))
+    key = hashlib.sha256(f"{scope}:{ip}:{bucket}".encode()).hexdigest()
+    doc = await db.rate_limits.find_one_and_update(
+        {"_id": key},
+        {
+            "$inc": {"count": 1},
+            "$setOnInsert": {
+                "scope": scope,
+                "expires_at": now + timedelta(minutes=max(2, minutes * 2)),
+            },
+        },
+        upsert=True,
+        return_document=True,
+    )
+    if doc and int(doc.get("count", 0)) > limit:
+        raise HTTPException(status_code=429, detail="Muitas solicitações. Aguarde um pouco e tente novamente.")
+
 
 class BaseDocument(BaseModel):
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
@@ -157,7 +188,7 @@ async def get_current_user(request: Request) -> dict:
         payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
         if payload.get("type") != "access":
             raise HTTPException(status_code=401, detail="Tipo de token inválido")
-        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+        user = await db.users.find_one({"_id": as_object_id(payload["sub"], "Sessão inválida")})
         if not user:
             raise HTTPException(status_code=401, detail="Usuário não encontrado")
         if payload.get("ver", 0) != user.get("token_version", 0):
@@ -553,8 +584,14 @@ async def login(payload: LoginInput, request: Request, response: Response):
 
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(payload.password, user["password_hash"]):
+        now = datetime.now(timezone.utc)
         await db.login_attempts.insert_one(
-            {"identifier": identifier, "email": email, "at": datetime.now(timezone.utc).isoformat()})
+            {
+                "identifier": identifier,
+                "email": email,
+                "at": now.isoformat(),
+                "expires_at": now + timedelta(minutes=LOCKOUT_MINUTES * 2),
+            })
         raise HTTPException(status_code=401, detail="E-mail ou senha inválidos")
 
     await db.login_attempts.delete_many({"identifier": identifier})
@@ -588,8 +625,8 @@ async def create_user(payload: UserCreate, background_tasks: BackgroundTasks, us
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="E-mail já cadastrado")
     if payload.password:
-        if len(payload.password) < 6:
-            raise HTTPException(status_code=400, detail="A senha deve ter ao menos 6 caracteres")
+        if len(payload.password) < MIN_PASSWORD_LENGTH:
+            raise HTTPException(status_code=400, detail=f"A senha deve ter ao menos {MIN_PASSWORD_LENGTH} caracteres")
         pw_hash = hash_password(payload.password)
     else:
         pw_hash = hash_password(secrets.token_urlsafe(16))
@@ -616,7 +653,8 @@ async def create_user(payload: UserCreate, background_tasks: BackgroundTasks, us
 
 @api_router.put("/users/{uid}")
 async def update_user(uid: str, payload: UserUpdate, user: dict = Depends(require_admin)):
-    target = await db.users.find_one({"_id": ObjectId(uid)})
+    oid = as_object_id(uid, "Usuário não encontrado")
+    target = await db.users.find_one({"_id": oid})
     if not target:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
     updates = {}
@@ -628,8 +666,8 @@ async def update_user(uid: str, payload: UserUpdate, user: dict = Depends(requir
         updates["categories"] = payload.categories
     inc = {}
     if payload.password:
-        if len(payload.password) < 6:
-            raise HTTPException(status_code=400, detail="A senha deve ter ao menos 6 caracteres")
+        if len(payload.password) < MIN_PASSWORD_LENGTH:
+            raise HTTPException(status_code=400, detail=f"A senha deve ter ao menos {MIN_PASSWORD_LENGTH} caracteres")
         updates["password_hash"] = hash_password(payload.password)
         inc["token_version"] = 1
     if updates or inc:
@@ -638,18 +676,19 @@ async def update_user(uid: str, payload: UserUpdate, user: dict = Depends(requir
             op["$set"] = updates
         if inc:
             op["$inc"] = inc
-        await db.users.update_one({"_id": ObjectId(uid)}, op)
-    updated = await db.users.find_one({"_id": ObjectId(uid)})
+        await db.users.update_one({"_id": oid}, op)
+    updated = await db.users.find_one({"_id": oid})
     return ser_user(updated)
 
 
 @api_router.delete("/users/{uid}")
 async def delete_user(uid: str, user: dict = Depends(require_admin)):
+    oid = as_object_id(uid, "Usuário não encontrado")
     if str(user["_id"]) == uid:
         raise HTTPException(status_code=400, detail="Você não pode remover seu próprio usuário")
     if await db.users.count_documents({}) <= 1:
         raise HTTPException(status_code=400, detail="Deve existir ao menos um usuário")
-    await db.users.delete_one({"_id": ObjectId(uid)})
+    await db.users.delete_one({"_id": oid})
     return {"message": "Usuário removido"}
 
 
@@ -662,7 +701,7 @@ async def refresh(request: Request, response: Response):
         payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
         if payload.get("type") != "refresh":
             raise HTTPException(status_code=401, detail="Tipo de token inválido")
-        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+        user = await db.users.find_one({"_id": as_object_id(payload["sub"], "Sessão inválida")})
         if not user or payload.get("ver", 0) != user.get("token_version", 0):
             raise HTTPException(status_code=401, detail="Sessão expirada")
         uid = str(user["_id"])
@@ -703,8 +742,8 @@ async def forgot_password(payload: ForgotInput, background_tasks: BackgroundTask
 
 @api_router.post("/auth/reset-password")
 async def reset_password(payload: ResetInput):
-    if len(payload.password) < 6:
-        raise HTTPException(status_code=400, detail="A senha deve ter ao menos 6 caracteres")
+    if len(payload.password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"A senha deve ter ao menos {MIN_PASSWORD_LENGTH} caracteres")
     now_iso = datetime.now(timezone.utc).isoformat()
     h = hashlib.sha256(payload.token.encode()).hexdigest()
     doc = await db.password_reset_tokens.find_one_and_update(
@@ -713,7 +752,7 @@ async def reset_password(payload: ResetInput):
     if not doc:
         raise HTTPException(status_code=400, detail="Link inválido, expirado ou já utilizado")
     await db.users.update_one(
-        {"_id": ObjectId(doc["user_id"])},
+        {"_id": as_object_id(doc["user_id"], "Usuário não encontrado")},
         {"$set": {"password_hash": hash_password(payload.password)}, "$inc": {"token_version": 1}})
     await db.password_reset_tokens.delete_many({"user_id": doc["user_id"], "used": False})
     await db.login_attempts.delete_many({"email": doc["email"]})
@@ -790,17 +829,21 @@ async def create_category(payload: CategoryInput, user: dict = Depends(require_a
 
 @api_router.put("/categories/{cat_id}")
 async def update_category(cat_id: str, payload: CategoryInput, user: dict = Depends(require_admin)):
+    oid = as_object_id(cat_id, "Categoria não encontrada")
     doc = payload.model_dump()
-    res = await db.categories.update_one({"_id": ObjectId(cat_id)}, {"$set": doc})
+    res = await db.categories.update_one({"_id": oid}, {"$set": doc})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
-    updated = await db.categories.find_one({"_id": ObjectId(cat_id)})
+    updated = await db.categories.find_one({"_id": oid})
     return ser_category(updated)
 
 
 @api_router.delete("/categories/{cat_id}")
 async def delete_category(cat_id: str, user: dict = Depends(require_admin)):
-    await db.categories.delete_one({"_id": ObjectId(cat_id)})
+    oid = as_object_id(cat_id, "Categoria não encontrada")
+    result = await db.categories.delete_one({"_id": oid})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
     return {"message": "Categoria removida"}
 
 
@@ -818,10 +861,12 @@ async def next_ticket_number() -> str:
 
 @api_router.post("/tickets")
 async def create_ticket(
+    request: Request,
     background_tasks: BackgroundTasks,
     payload: str = Form(...),
     file: Optional[UploadFile] = File(None),
 ):
+    await enforce_rate_limit(request, "ticket-create", limit=10, minutes=1)
     if len(payload.encode("utf-8")) > 256 * 1024:
         raise HTTPException(status_code=413, detail="Solicitação muito grande")
     try:
@@ -917,7 +962,8 @@ async def create_ticket(
 
 
 @api_router.get("/tickets/track")
-async def track_ticket(q: str):
+async def track_ticket(q: str, request: Request):
+    await enforce_rate_limit(request, "ticket-track", limit=30, minutes=1)
     q = q.strip()
     if not q or len(q) > 254:
         return []
@@ -980,7 +1026,8 @@ async def list_tickets(status: Optional[str] = None, category_id: Optional[str] 
 
 @api_router.get("/tickets/{ticket_id}")
 async def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
-    doc = await db.tickets.find_one({"_id": ObjectId(ticket_id)})
+    oid = as_object_id(ticket_id, "Chamado não encontrado")
+    doc = await db.tickets.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
     if user.get("role") != "admin" and doc.get("category_id") not in (user.get("categories") or []):
@@ -992,7 +1039,8 @@ async def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
 async def update_status(ticket_id: str, payload: StatusUpdate, user: dict = Depends(get_current_user)):
     if payload.status not in STATUS_LABELS:
         raise HTTPException(status_code=400, detail="Status inválido")
-    doc = await db.tickets.find_one({"_id": ObjectId(ticket_id)})
+    oid = as_object_id(ticket_id, "Chamado não encontrado")
+    doc = await db.tickets.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
     if user.get("role") != "admin" and doc.get("category_id") not in (user.get("categories") or []):
@@ -1001,9 +1049,9 @@ async def update_status(ticket_id: str, payload: StatusUpdate, user: dict = Depe
     actor = user.get("name") or user.get("email")
     entry = {"status": payload.status, "at": now, "note": payload.note or "", "by": actor}
     await db.tickets.update_one(
-        {"_id": ObjectId(ticket_id)},
+        {"_id": oid},
         {"$set": {"status": payload.status}, "$push": {"history": entry}})
-    doc = await db.tickets.find_one({"_id": ObjectId(ticket_id)})
+    doc = await db.tickets.find_one({"_id": oid})
     return ser_ticket(doc)
 
 
@@ -1158,6 +1206,8 @@ async def startup():
         raise
     await db.users.create_index("email", unique=True)
     await db.login_attempts.create_index("identifier")
+    await db.login_attempts.create_index("expires_at", expireAfterSeconds=0)
+    await db.rate_limits.create_index("expires_at", expireAfterSeconds=0)
     await db.tickets.create_index("ticket_number", unique=True)
     await db.tickets.create_index([("category_id", 1), ("created_at", -1)])
     await db.tickets.create_index([("status", 1), ("created_at", -1)])
