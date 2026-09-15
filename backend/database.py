@@ -606,9 +606,7 @@ class SqlServerCollection:
             upsert=upsert,
             return_after=bool(return_document),
         )
-        if return_document:
-            return doc
-        return await self.find_one(query)
+        return doc
 
     async def delete_one(self, query: dict):
         def work():
