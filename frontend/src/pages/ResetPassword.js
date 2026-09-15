@@ -19,15 +19,15 @@ export default function ResetPassword() {
   const [loading, setLoading] = useState(false);
 
   const checks = useMemo(() => ([
-    { label: "6 ou mais caracteres", ok: password.length >= 6 },
+    { label: "8 ou mais caracteres", ok: password.length >= 8 },
     { label: "As duas senhas são iguais", ok: !!password && password === confirm },
   ]), [password, confirm]);
 
   const submit = async (e) => {
     e.preventDefault();
     if (loading) return;
-    if (password.length < 6) {
-      toast.error("A senha deve ter ao menos 6 caracteres");
+    if (password.length < 8) {
+      toast.error("A senha deve ter ao menos 8 caracteres");
       return;
     }
     if (password !== confirm) {
