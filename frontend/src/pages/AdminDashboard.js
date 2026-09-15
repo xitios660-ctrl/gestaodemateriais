@@ -35,7 +35,7 @@ function AnimatedNumber({ value = 0 }) {
     }
     const start = performance.now();
     const duration = 500;
-    const from = display;
+    const from = 0;
     let frame;
     const tick = (now) => {
       const p = Math.min(1, (now - start) / duration);
