@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Loader2, ArrowLeft, ShieldCheck, LockKeyhole } from "lucide-react";
+import { Loader2, ArrowLeft, ShieldCheck, LockKeyhole, Eye, EyeOff } from "lucide-react";
 
 export default function AdminLogin() {
   const { login, user } = useAuth();
@@ -16,7 +16,7 @@ export default function AdminLogin() {
   const reduceMotion = useReducedMotion();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false);\n  const [showPassword, setShowPassword] = useState(false);\n  const [capsLock, setCapsLock] = useState(false);
 
   useEffect(() => {
     if (user) navigate("/admin", { replace: true });
@@ -27,7 +27,7 @@ export default function AdminLogin() {
     if (loading) return;
     setLoading(true);
     try {
-      await login(email.trim(), password);
+      await login(email.trim().toLowerCase(), password.trim());
       toast.success("Acesso autorizado");
       navigate("/admin");
     } catch (err) {
