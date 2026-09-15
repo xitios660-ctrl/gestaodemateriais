@@ -233,6 +233,23 @@ def scope_match(user: dict) -> dict:
     return {"category_id": {"$in": user.get("categories", []) or []}}
 
 
+async def write_audit(user: dict, action: str, entity_type: str, entity_id: str, details: Optional[dict] = None):
+    """Best-effort audit trail. Never store credentials or raw secrets here."""
+    try:
+        await db.audit_logs.insert_one({
+            "actor_id": str(user.get("_id", "")),
+            "actor_email": user.get("email", ""),
+            "actor_name": user.get("name", ""),
+            "action": action,
+            "entity_type": entity_type,
+            "entity_id": str(entity_id),
+            "details": details or {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as exc:
+        logger.warning("Falha ao registrar auditoria (%s): %s", action, exc)
+
+
 # ----------------------------------------------------------------------------
 # Object storage helpers
 # ----------------------------------------------------------------------------
@@ -665,6 +682,11 @@ async def create_user(payload: UserCreate, background_tasks: BackgroundTasks, us
     }
     res = await db.users.insert_one(doc)
     doc["_id"] = res.inserted_id
+    await write_audit(user, "user.create", "user", str(res.inserted_id), {
+        "email": email,
+        "role": role,
+        "categories_count": len(doc.get("categories") or []),
+    })
     if payload.send_welcome:
         token = secrets.token_urlsafe(32)
         await db.password_reset_tokens.insert_one({
@@ -704,6 +726,12 @@ async def update_user(uid: str, payload: UserUpdate, user: dict = Depends(requir
             op["$inc"] = inc
         await db.users.update_one({"_id": oid}, op)
     updated = await db.users.find_one({"_id": oid})
+    await write_audit(user, "user.update", "user", uid, {
+        "email": updated.get("email", ""),
+        "role": updated.get("role", ""),
+        "categories_count": len(updated.get("categories") or []),
+        "password_changed": bool(payload.password),
+    })
     return ser_user(updated)
 
 
@@ -715,6 +743,10 @@ async def delete_user(uid: str, user: dict = Depends(require_admin)):
     if await db.users.count_documents({}) <= 1:
         raise HTTPException(status_code=400, detail="Deve existir ao menos um usuário")
     await db.users.delete_one({"_id": oid})
+    await write_audit(user, "user.delete", "user", uid, {
+        "email": target.get("email", ""),
+        "name": target.get("name", ""),
+    })
     return {"message": "Usuário removido"}
 
 
@@ -870,6 +902,10 @@ async def create_category(payload: CategoryInput, user: dict = Depends(require_a
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
     res = await db.categories.insert_one(doc)
     doc["_id"] = res.inserted_id
+    await write_audit(user, "category.create", "category", str(res.inserted_id), {
+        "name": normalized_name,
+        "active": doc.get("active", True),
+    })
     return ser_category(doc)
 
 
@@ -890,15 +926,25 @@ async def update_category(cat_id: str, payload: CategoryInput, user: dict = Depe
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
     updated = await db.categories.find_one({"_id": oid})
+    await write_audit(user, "category.update", "category", cat_id, {
+        "name": updated.get("name", ""),
+        "active": updated.get("active", True),
+    })
     return ser_category(updated)
 
 
 @api_router.delete("/categories/{cat_id}")
 async def delete_category(cat_id: str, user: dict = Depends(require_admin)):
     oid = as_object_id(cat_id, "Categoria não encontrada")
+    target = await db.categories.find_one({"_id": oid})
+    if not target:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada")
     result = await db.categories.delete_one({"_id": oid})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    await write_audit(user, "category.delete", "category", cat_id, {
+        "name": target.get("name", ""),
+    })
     return {"message": "Categoria removida"}
 
 
@@ -1103,10 +1149,16 @@ async def update_status(ticket_id: str, payload: StatusUpdate, user: dict = Depe
     now = datetime.now(timezone.utc).isoformat()
     actor = user.get("name") or user.get("email")
     entry = {"status": payload.status, "at": now, "note": payload.note or "", "by": actor}
+    previous_status = doc.get("status")
     await db.tickets.update_one(
         {"_id": oid},
         {"$set": {"status": payload.status}, "$push": {"history": entry}})
     doc = await db.tickets.find_one({"_id": oid})
+    await write_audit(user, "ticket.status", "ticket", ticket_id, {
+        "ticket_number": doc.get("ticket_number", ""),
+        "from": previous_status,
+        "to": payload.status,
+    })
     return ser_ticket(doc)
 
 
@@ -1122,6 +1174,35 @@ async def download_file(path: str, user: dict = Depends(get_current_user)):
     return StarletteResponse(content=data, media_type=record["file"].get("content_type", content_type),
                              headers={"Content-Disposition": f'attachment; filename="{fname}"',
                                       "X-Content-Type-Options": "nosniff"})
+
+
+# ----------------------------------------------------------------------------
+# Admin audit
+# ----------------------------------------------------------------------------
+@api_router.get("/admin/audit")
+async def admin_audit(page: int = 1, limit: int = 50, user: dict = Depends(require_admin)):
+    safe_limit = min(max(limit, 10), 100)
+    safe_page = max(page, 1)
+    total = await db.audit_logs.count_documents({})
+    docs = await (
+        db.audit_logs.find({})
+        .sort("created_at", -1)
+        .skip((safe_page - 1) * safe_limit)
+        .limit(safe_limit)
+        .to_list(safe_limit)
+    )
+    items = []
+    for doc in docs:
+        item = dict(doc)
+        item["id"] = str(item.pop("_id"))
+        items.append(item)
+    return {
+        "items": items,
+        "total": total,
+        "page": safe_page,
+        "pages": max(1, (total + safe_limit - 1) // safe_limit),
+        "limit": safe_limit,
+    }
 
 
 # ----------------------------------------------------------------------------
@@ -1313,6 +1394,8 @@ async def startup():
     await db.password_reset_tokens.create_index("token_hash", unique=True)
     await db.password_reset_tokens.create_index("email")
     await db.password_reset_requests.create_index("email")
+    await db.audit_logs.create_index([("created_at", -1)])
+    await db.audit_logs.create_index([("actor_id", 1), ("created_at", -1)])
     await seed_admin()
     await seed_categories()
     try:
