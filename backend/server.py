@@ -6,6 +6,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 import logging
+import asyncio
 import uuid
 import json
 import random
@@ -25,7 +26,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 import jwt
 import httpx
-import requests
 from fastapi import FastAPI, APIRouter, Request, Response, HTTPException, Depends, UploadFile, File, Form, BackgroundTasks
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
@@ -245,51 +245,59 @@ def _safe_local_path(path: str) -> Path:
     return target
 
 
-def init_storage(force: bool = False):
+async def init_storage(force: bool = False):
     """Use Emergent object storage when configured; otherwise use local disk."""
     global storage_key
     if not EMERGENT_KEY:
         return None
     if storage_key and not force:
         return storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    async with httpx.AsyncClient(timeout=30) as http:
+        resp = await http.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY})
     resp.raise_for_status()
     storage_key = resp.json()["storage_key"]
     return storage_key
 
 
-def put_object(path: str, data: bytes, content_type: str) -> dict:
+async def put_object(path: str, data: bytes, content_type: str) -> dict:
     if not EMERGENT_KEY:
         target = _safe_local_path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
-        return {"path": path, "storage": "local"}
+        await asyncio.to_thread(target.write_bytes, data)
+        return {"path": path, "storage": "local", "size": len(data)}
 
-    key = init_storage()
-    resp = requests.put(f"{STORAGE_URL}/objects/{path}",
-                        headers={"X-Storage-Key": key, "Content-Type": content_type},
-                        data=data, timeout=120)
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.put(f"{STORAGE_URL}/objects/{path}",
-                            headers={"X-Storage-Key": key, "Content-Type": content_type},
-                            data=data, timeout=120)
+    key = await init_storage()
+    async with httpx.AsyncClient(timeout=120) as http:
+        resp = await http.put(
+            f"{STORAGE_URL}/objects/{path}",
+            headers={"X-Storage-Key": key, "Content-Type": content_type},
+            content=data,
+        )
+        if resp.status_code == 404:
+            key = await init_storage(force=True)
+            resp = await http.put(
+                f"{STORAGE_URL}/objects/{path}",
+                headers={"X-Storage-Key": key, "Content-Type": content_type},
+                content=data,
+            )
     resp.raise_for_status()
     return resp.json()
 
 
-def get_object(path: str):
+async def get_object(path: str):
     if not EMERGENT_KEY:
         target = _safe_local_path(path)
         if not target.exists() or not target.is_file():
             raise HTTPException(status_code=404, detail="Arquivo não encontrado")
-        return target.read_bytes(), "application/octet-stream"
+        data = await asyncio.to_thread(target.read_bytes)
+        return data, "application/octet-stream"
 
-    key = init_storage()
-    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    key = await init_storage()
+    async with httpx.AsyncClient(timeout=60) as http:
+        resp = await http.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key})
+        if resp.status_code == 404:
+            key = await init_storage(force=True)
+            resp = await http.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key})
     resp.raise_for_status()
     return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
@@ -968,7 +976,7 @@ async def create_ticket(
             if ext not in allowed_extensions:
                 raise HTTPException(status_code=400, detail="Tipo de arquivo não permitido")
             path = f"{APP_NAME}/tickets/{uuid.uuid4()}.{ext}"
-            result = put_object(path, raw, file.content_type or "application/octet-stream")
+            result = await put_object(path, raw, file.content_type or "application/octet-stream")
             file_ref = {
                 "storage_path": result["path"],
                 "original_filename": safe_name,
@@ -1109,7 +1117,7 @@ async def download_file(path: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     if user.get("role") != "admin" and record.get("category_id") not in (user.get("categories") or []):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
-    data, content_type = get_object(path)
+    data, content_type = await get_object(path)
     fname = os.path.basename(record["file"].get("original_filename", "arquivo")).replace("\r", "").replace("\n", "").replace('"', "")
     return StarletteResponse(content=data, media_type=record["file"].get("content_type", content_type),
                              headers={"Content-Disposition": f'attachment; filename="{fname}"',
@@ -1308,7 +1316,7 @@ async def startup():
     await seed_admin()
     await seed_categories()
     try:
-        init_storage()
+        await init_storage()
         logger.info("Storage inicializado (%s)", "Emergent" if EMERGENT_KEY else f"local: {LOCAL_STORAGE_DIR}")
     except Exception as e:
         logger.warning("Storage remoto indisponível, usando disco local: %s", e)
