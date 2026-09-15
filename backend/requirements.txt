@@ -9,4 +9,5 @@ python-multipart==0.0.20
 bcrypt==4.3.0
 PyJWT==2.10.1
 httpx==0.28.1
+requests==2.32.4
 openpyxl==3.1.5
