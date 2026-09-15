@@ -14,7 +14,7 @@ import hashlib
 import ipaddress
 import re
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Annotated
+from typing import List, Optional, Annotated, Literal
 from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urlparse
@@ -480,44 +480,44 @@ class ResetInput(BaseModel):
 
 
 class UserCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=120)
     email: EmailStr
-    password: Optional[str] = None
-    role: str = "responsavel"
-    categories: List[str] = []
+    password: Optional[str] = Field(default=None, max_length=256)
+    role: Literal["admin", "responsavel"] = "responsavel"
+    categories: List[str] = Field(default_factory=list, max_length=200)
     send_welcome: bool = True
 
 
 class UserUpdate(BaseModel):
-    name: Optional[str] = None
-    role: Optional[str] = None
-    password: Optional[str] = None
-    categories: Optional[List[str]] = None
+    name: Optional[str] = Field(default=None, max_length=120)
+    role: Optional[Literal["admin", "responsavel"]] = None
+    password: Optional[str] = Field(default=None, max_length=256)
+    categories: Optional[List[str]] = Field(default=None, max_length=200)
 
 
 class CustomField(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    label: str
-    type: str  # text, textarea, select, date, checkbox, number
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), max_length=80)
+    label: str = Field(min_length=1, max_length=160)
+    type: Literal["text", "textarea", "select", "number", "date", "checkbox"]
     required: bool = False
-    options: List[str] = []
+    options: List[str] = Field(default_factory=list, max_length=100)
 
 
 class CategoryInput(BaseModel):
-    name: str
-    icon: str = "Laptop"
-    description: str = ""
-    lead_time_hours: int = 24
-    owners: List[str] = []
-    fields: List[CustomField] = []
-    template_columns: List[str] = []
-    template_filename: Optional[str] = None
+    name: str = Field(min_length=1, max_length=120)
+    icon: str = Field(default="Laptop", max_length=80)
+    description: str = Field(default="", max_length=1200)
+    lead_time_hours: int = Field(default=24, ge=1, le=720)
+    owners: List[EmailStr] = Field(default_factory=list, max_length=100)
+    fields: List[CustomField] = Field(default_factory=list, max_length=100)
+    template_columns: List[str] = Field(default_factory=list, max_length=100)
+    template_filename: Optional[str] = Field(default=None, max_length=180)
     active: bool = True
 
 
 class StatusUpdate(BaseModel):
-    status: str
-    note: Optional[str] = None
+    status: Literal["aberto", "em_analise", "em_andamento", "concluido", "cancelado"]
+    note: Optional[str] = Field(default=None, max_length=1000)
 
 
 # ----------------------------------------------------------------------------
@@ -820,7 +820,15 @@ async def category_template(cat_id: str):
 
 @api_router.post("/categories")
 async def create_category(payload: CategoryInput, user: dict = Depends(require_admin)):
+    normalized_name = payload.name.strip()
+    duplicate = await db.categories.find_one({
+        "name": {"$regex": f"^{re.escape(normalized_name)}$", "$options": "i"}
+    })
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Já existe uma categoria com este nome")
     doc = payload.model_dump()
+    doc["name"] = normalized_name
+    doc["owners"] = [str(owner).lower() for owner in payload.owners]
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
     res = await db.categories.insert_one(doc)
     doc["_id"] = res.inserted_id
@@ -830,7 +838,16 @@ async def create_category(payload: CategoryInput, user: dict = Depends(require_a
 @api_router.put("/categories/{cat_id}")
 async def update_category(cat_id: str, payload: CategoryInput, user: dict = Depends(require_admin)):
     oid = as_object_id(cat_id, "Categoria não encontrada")
+    normalized_name = payload.name.strip()
+    duplicate = await db.categories.find_one({
+        "_id": {"$ne": oid},
+        "name": {"$regex": f"^{re.escape(normalized_name)}$", "$options": "i"},
+    })
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Já existe uma categoria com este nome")
     doc = payload.model_dump()
+    doc["name"] = normalized_name
+    doc["owners"] = [str(owner).lower() for owner in payload.owners]
     res = await db.categories.update_one({"_id": oid}, {"$set": doc})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
