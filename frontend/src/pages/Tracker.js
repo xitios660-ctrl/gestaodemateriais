@@ -89,7 +89,6 @@ export default function Tracker() {
   useEffect(() => {
     const initial = params.get("q");
     if (initial) search(initial);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
