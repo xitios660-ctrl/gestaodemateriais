@@ -277,46 +277,60 @@ async def init_storage(force: bool = False):
 
 
 async def put_object(path: str, data: bytes, content_type: str) -> dict:
-    if not EMERGENT_KEY:
-        target = _safe_local_path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(target.write_bytes, data)
-        return {"path": path, "storage": "local", "size": len(data)}
+    try:
+        if not EMERGENT_KEY:
+            target = _safe_local_path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(target.write_bytes, data)
+            return {"path": path, "storage": "local", "size": len(data)}
 
-    key = await init_storage()
-    async with httpx.AsyncClient(timeout=120) as http:
-        resp = await http.put(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key, "Content-Type": content_type},
-            content=data,
-        )
-        if resp.status_code == 404:
-            key = await init_storage(force=True)
+        key = await init_storage()
+        async with httpx.AsyncClient(timeout=120) as http:
             resp = await http.put(
                 f"{STORAGE_URL}/objects/{path}",
                 headers={"X-Storage-Key": key, "Content-Type": content_type},
                 content=data,
             )
-    resp.raise_for_status()
-    return resp.json()
+            if resp.status_code == 404:
+                key = await init_storage(force=True)
+                resp = await http.put(
+                    f"{STORAGE_URL}/objects/{path}",
+                    headers={"X-Storage-Key": key, "Content-Type": content_type},
+                    content=data,
+                )
+        resp.raise_for_status()
+        return resp.json()
+    except HTTPException:
+        raise
+    except (OSError, httpx.HTTPError, KeyError, ValueError) as exc:
+        logger.error("Falha ao armazenar arquivo: %s", exc)
+        raise HTTPException(status_code=503, detail="Não foi possível armazenar o arquivo agora. Tente novamente.")
 
 
 async def get_object(path: str):
-    if not EMERGENT_KEY:
-        target = _safe_local_path(path)
-        if not target.exists() or not target.is_file():
-            raise HTTPException(status_code=404, detail="Arquivo não encontrado")
-        data = await asyncio.to_thread(target.read_bytes)
-        return data, "application/octet-stream"
+    try:
+        if not EMERGENT_KEY:
+            target = _safe_local_path(path)
+            if not target.exists() or not target.is_file():
+                raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+            data = await asyncio.to_thread(target.read_bytes)
+            return data, "application/octet-stream"
 
-    key = await init_storage()
-    async with httpx.AsyncClient(timeout=60) as http:
-        resp = await http.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key})
-        if resp.status_code == 404:
-            key = await init_storage(force=True)
+        key = await init_storage()
+        async with httpx.AsyncClient(timeout=60) as http:
             resp = await http.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key})
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+            if resp.status_code == 404:
+                key = await init_storage(force=True)
+                resp = await http.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key})
+        if resp.status_code == 404:
+            raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+        resp.raise_for_status()
+        return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+    except HTTPException:
+        raise
+    except (OSError, httpx.HTTPError, KeyError, ValueError) as exc:
+        logger.error("Falha ao recuperar arquivo: %s", exc)
+        raise HTTPException(status_code=503, detail="Não foi possível acessar o arquivo agora. Tente novamente.")
 
 
 # ----------------------------------------------------------------------------
