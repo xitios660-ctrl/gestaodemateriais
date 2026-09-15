@@ -24,6 +24,17 @@ function fmt(dt) {
   return new Date(dt).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }
 
+function formatFieldValue(value) {
+  if (typeof value === "boolean") return value ? "Sim" : "Não";
+  if (value && typeof value === "object" && ("parent" in value || "child" in value)) {
+    const parent = String(value.parent || "").trim();
+    const child = String(value.child || "").trim();
+    if (parent && child) return `${parent} → ${child}`;
+    return parent || child || "—";
+  }
+  return String(value || "—");
+}
+
 function AnimatedNumber({ value = 0 }) {
   const reduceMotion = useReducedMotion();
   const [display, setDisplay] = useState(reduceMotion ? value : 0);
@@ -733,7 +744,7 @@ export default function AdminDashboard() {
                     {Object.entries(selected.field_values || {}).map(([k, v]) => (
                       <div key={k} className="rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-3 text-sm">
                         <span className="block text-[11px] uppercase tracking-wide text-slate-400 mb-0.5">{k}</span>
-                        <span className="text-slate-800 font-medium break-words">{typeof v === "boolean" ? (v ? "Sim" : "Não") : String(v || "—")}</span>
+                        <span className="text-slate-800 font-medium break-words">{formatFieldValue(v)}</span>
                       </div>
                     ))}
                   </div>
