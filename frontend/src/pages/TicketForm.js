@@ -151,7 +151,8 @@ export default function TicketForm() {
 
       if (field.type === "dependent_select") {
         const pair = val && typeof val === "object" ? val : {};
-        if (field.required && (!pair.parent || !pair.child)) {
+        const started = !!pair.parent || !!pair.child;
+        if ((field.required || started) && (!pair.parent || !pair.child)) {
           next[`field.${field.id}`] = "Selecione a categoria e a subcategoria";
         }
         continue;
