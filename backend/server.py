@@ -35,9 +35,9 @@ from fastapi import FastAPI, APIRouter, Request, Response, HTTPException, Depend
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import Response as StarletteResponse, FileResponse, JSONResponse
-from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict, EmailStr
 from bson import ObjectId
+from database import create_database
 
 # ----------------------------------------------------------------------------
 # Setup
@@ -45,10 +45,7 @@ from bson import ObjectId
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-db_name = os.environ.get("DB_NAME", "gestao_materiais")
-client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=10000)
-db = client[db_name]
+client, db, db_name, DB_ENGINE = create_database()
 
 app = FastAPI(title="Gestão de Materiais API", version="1.0.0")
 api_router = APIRouter(prefix="/api")
@@ -92,7 +89,7 @@ STATUS_LABELS = {
 }
 
 # ----------------------------------------------------------------------------
-# Mongo helpers
+# Database helpers
 # ----------------------------------------------------------------------------
 def _validate_object_id(v):
     if isinstance(v, ObjectId):
@@ -1900,10 +1897,17 @@ async def seed_categories():
 @app.on_event("startup")
 async def startup():
     try:
-        await client.admin.command("ping")
-        logger.info("MongoDB conectado: %s", db_name)
+        database_info = await client.admin.command("ping")
+        if DB_ENGINE == "sqlserver":
+            logger.info(
+                "SQL Server conectado: %s (versão %s)",
+                db_name,
+                database_info.get("version", "desconhecida"),
+            )
+        else:
+            logger.info("MongoDB conectado: %s", db_name)
     except Exception as e:
-        logger.error("Falha ao conectar no MongoDB: %s", e)
+        logger.error("Falha ao conectar no banco %s: %s", DB_ENGINE, e)
         raise
     await db.users.create_index("email", unique=True)
     await db.login_attempts.create_index("identifier")
@@ -1942,10 +1946,17 @@ async def root():
 @api_router.get("/health")
 async def health():
     try:
-        await client.admin.command("ping")
-        return {"status": "ok", "database": "connected"}
+        database_info = await client.admin.command("ping")
+        response = {
+            "status": "ok",
+            "database": "connected",
+            "database_engine": DB_ENGINE,
+        }
+        if DB_ENGINE == "sqlserver" and database_info.get("version"):
+            response["database_version"] = database_info["version"]
+        return response
     except Exception as e:
-        logger.error("Health check falhou: %s", e)
+        logger.error("Health check falhou (%s): %s", DB_ENGINE, e)
         raise HTTPException(status_code=503, detail="Serviço temporariamente indisponível")
 
 
