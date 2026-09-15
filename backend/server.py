@@ -78,10 +78,7 @@ SMTP_STARTTLS = (os.environ.get("SMTP_STARTTLS") or "true").strip().lower() in (
 BREVO_API_KEY = (os.environ.get("BREVO_API_KEY") or "").strip()
 BREVO_SENDER_EMAIL = (os.environ.get("BREVO_SENDER_EMAIL") or "").strip().lower()
 BREVO_SENDER_NAME = (os.environ.get("BREVO_SENDER_NAME") or EMAIL_FROM_NAME).strip()
-EMAIL_STATUS_SELF_TEST_TICKET_ID = (os.environ.get("EMAIL_STATUS_SELF_TEST_TICKET_ID") or "").strip()
 BREVO_WEBHOOK_SECRET = (os.environ.get("BREVO_WEBHOOK_SECRET") or "").strip()
-BREVO_CREATE_WEBHOOK_ONCE = (os.environ.get("BREVO_CREATE_WEBHOOK_ONCE") or "").strip().lower() in ("1", "true", "yes")
-BREVO_DIAGNOSTIC_EMAIL = (os.environ.get("BREVO_DIAGNOSTIC_EMAIL") or "").strip().lower()
 DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
 PRIMARY_NOTIFICATION_EMAIL = (os.environ.get("PRIMARY_NOTIFICATION_EMAIL") or DEFAULT_OWNER_EMAIL).strip().lower()
 DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
@@ -441,6 +438,31 @@ def _assert_safe_email(subject: str, html: str) -> None:
                 raise ValueError(f"Anchor text mismatch (G3)")
 
 
+def _email_identity(value: str) -> str:
+    email = str(value or "").strip().lower()
+    if "@" not in email:
+        return email
+    local, domain = email.rsplit("@", 1)
+    if domain in {"gmail.com", "googlemail.com"}:
+        local = local.split("+", 1)[0].replace(".", "")
+        domain = "gmail.com"
+    return f"{local}@{domain}"
+
+
+def unique_recipient_emails(values) -> List[str]:
+    result, seen = [], set()
+    for value in values:
+        email = str(value or "").strip().lower()
+        if not email:
+            continue
+        identity = _email_identity(email)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append(email)
+    return result
+
+
 def email_delivery_configured() -> bool:
     brevo_ready = bool(BREVO_API_KEY and BREVO_SENDER_EMAIL)
     emergent_ready = bool(EMAIL_KEY and not EMAIL_KEY.startswith("{"))
@@ -559,114 +581,6 @@ async def notify_owners(ticket: dict, owners: List[str]):
                     "at": datetime.now(timezone.utc).isoformat()})
     await db.tickets.update_one({"ticket_number": ticket["ticket_number"]},
                                 {"$set": {"email_log": log}})
-
-
-async def log_brevo_senders() -> None:
-    if not BREVO_API_KEY or not BREVO_DIAGNOSTIC_EMAIL:
-        return
-    try:
-        async with httpx.AsyncClient(timeout=30) as client_http:
-            resp = await client_http.get(
-                "https://api.brevo.com/v3/senders",
-                headers={"api-key": BREVO_API_KEY, "accept": "application/json"},
-            )
-        if resp.status_code >= 400:
-            logger.error("Brevo sender diagnostic failed: HTTP %s %s", resp.status_code, resp.text[:300])
-            return
-        senders = resp.json().get("senders", [])
-        logger.info("Brevo sender diagnostic count=%s", len(senders))
-        for sender in senders[:20]:
-            logger.info(
-                "Brevo sender email=%s active=%s",
-                str(sender.get("email") or "").strip().lower(),
-                sender.get("active"),
-            )
-    except Exception as exc:
-        logger.error("Brevo sender diagnostic error: %s: %s", type(exc).__name__, str(exc)[:240])
-
-
-async def log_brevo_email_diagnostics() -> None:
-    if not BREVO_API_KEY or not BREVO_DIAGNOSTIC_EMAIL:
-        return
-    try:
-        async with httpx.AsyncClient(timeout=30) as client_http:
-            resp = await client_http.get(
-                "https://api.brevo.com/v3/smtp/statistics/events",
-                headers={"api-key": BREVO_API_KEY, "accept": "application/json"},
-                params={
-                    "email": BREVO_DIAGNOSTIC_EMAIL,
-                    "days": 1,
-                    "limit": 50,
-                    "sort": "desc",
-                },
-            )
-        if resp.status_code >= 400:
-            logger.error(
-                "Brevo diagnostic failed: HTTP %s %s",
-                resp.status_code,
-                resp.text[:300],
-            )
-            return
-        events = resp.json().get("events", [])
-        logger.info(
-            "Brevo diagnostic email=%s events=%s",
-            BREVO_DIAGNOSTIC_EMAIL,
-            len(events),
-        )
-        for item in events[:20]:
-            logger.info(
-                "Brevo diagnostic event=%s email=%s message_id=%s reason=%s date=%s",
-                item.get("event", "unknown"),
-                item.get("email", ""),
-                item.get("messageId", ""),
-                str(item.get("reason") or "")[:200],
-                item.get("date", ""),
-            )
-    except Exception as exc:
-        logger.error("Brevo diagnostic error: %s: %s", type(exc).__name__, str(exc)[:240])
-
-
-async def ensure_brevo_webhook() -> None:
-    if not BREVO_CREATE_WEBHOOK_ONCE or not BREVO_API_KEY or not BREVO_WEBHOOK_SECRET:
-        return
-    base = FRONTEND_URL.rstrip("/")
-    if not base.startswith("https://"):
-        return
-    webhook_url = f"{base}/api/email/brevo-webhook"
-    payload = {
-        "url": webhook_url,
-        "description": "Gestão de Materiais - status de entrega",
-        "events": [
-            "request", "delivered", "hardBounce", "softBounce",
-            "blocked", "invalid", "deferred", "spam"
-        ],
-        "type": "transactional",
-        "headers": [
-            {"key": "x-brevo-webhook-secret", "value": BREVO_WEBHOOK_SECRET}
-        ],
-    }
-    try:
-        async with httpx.AsyncClient(timeout=30) as client_http:
-            created = await client_http.post(
-                "https://api.brevo.com/v3/webhooks",
-                headers={
-                    "api-key": BREVO_API_KEY,
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
-                json=payload,
-            )
-        if created.status_code >= 400:
-            logger.error(
-                "Brevo webhook create failed: HTTP %s %s",
-                created.status_code,
-                created.text[:300],
-            )
-            return
-        webhook_id = created.json().get("id")
-        logger.info("Brevo delivery webhook configured id=%s", webhook_id or "unknown")
-    except Exception as exc:
-        logger.error("Brevo webhook setup error: %s: %s", type(exc).__name__, str(exc)[:240])
 
 
 async def send_ticket_opened_email(ticket: dict) -> bool:
@@ -1412,7 +1326,7 @@ async def create_ticket(
     res = await db.tickets.insert_one(ticket)
     ticket["_id"] = res.inserted_id
 
-    owners = list(dict.fromkeys([email for email in [PRIMARY_NOTIFICATION_EMAIL, *(category.get("owners", []) or []), *DEFAULT_OWNERS] if email]))
+    owners = unique_recipient_emails([PRIMARY_NOTIFICATION_EMAIL, *(category.get("owners", []) or []), *DEFAULT_OWNERS])
     if owners:
         background_tasks.add_task(notify_owners, dict(ticket), owners)
     background_tasks.add_task(send_ticket_opened_email, dict(ticket))
@@ -1939,40 +1853,6 @@ async def startup():
     await seed_admin()
     await seed_categories()
     logger.info("Email delivery configured: %s", "yes" if email_delivery_configured() else "no")
-    await ensure_brevo_webhook()
-    await log_brevo_email_diagnostics()
-    await log_brevo_senders()
-    if EMAIL_STATUS_SELF_TEST_TICKET_ID and ObjectId.is_valid(EMAIL_STATUS_SELF_TEST_TICKET_ID):
-        test_oid = ObjectId(EMAIL_STATUS_SELF_TEST_TICKET_ID)
-        test_ticket = await db.tickets.find_one({
-            "_id": test_oid,
-            "selftest_status_done": {"$ne": True},
-        })
-        if test_ticket:
-            previous_status = test_ticket.get("status") or "aberto"
-            now = datetime.now(timezone.utc).isoformat()
-            await db.tickets.update_one(
-                {"_id": test_oid},
-                {
-                    "$set": {"status": "em_analise", "selftest_status_done": True},
-                    "$push": {
-                        "history": {
-                            "status": "em_analise",
-                            "at": now,
-                            "note": "Teste automático de notificação por e-mail",
-                            "by": "Sistema de teste",
-                        }
-                    },
-                },
-            )
-            test_ticket = await db.tickets.find_one({"_id": test_oid})
-            sent = await send_status_update_email(
-                dict(test_ticket),
-                previous_status,
-                "em_analise",
-                "Teste automático de notificação de status",
-            )
-            logger.info("Status email self-test: %s", "sent" if sent else "failed")
     try:
         await init_storage()
         logger.info("Storage inicializado (%s)", "Emergent" if EMERGENT_KEY else f"local: {LOCAL_STORAGE_DIR}")
