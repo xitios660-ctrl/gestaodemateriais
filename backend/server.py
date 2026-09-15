@@ -706,7 +706,15 @@ async def login(payload: LoginInput, request: Request, response: Response):
         raise HTTPException(status_code=429, detail="Muitas tentativas. Tente novamente em 15 minutos.")
 
     user = await db.users.find_one({"email": email})
-    if not user or not verify_password(payload.password, user["password_hash"]):
+    candidate_passwords = [payload.password]
+    trimmed_password = payload.password.strip()
+    if trimmed_password and trimmed_password != payload.password:
+        candidate_passwords.append(trimmed_password)
+    password_ok = bool(user) and any(
+        verify_password(candidate, user["password_hash"])
+        for candidate in candidate_passwords
+    )
+    if not password_ok:
         now = datetime.now(timezone.utc)
         await db.login_attempts.insert_one(
             {
@@ -1684,6 +1692,9 @@ async def security_headers_and_origin_guard(request: Request, call_next):
             return JSONResponse(status_code=403, content={"detail": "Origem da requisição não permitida"})
 
     response = await call_next(request)
+    if request.url.path.startswith("/api/auth/") or request.url.path.startswith("/admin"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
