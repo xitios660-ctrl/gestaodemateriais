@@ -46,7 +46,7 @@ Crie o arquivo `backend/.env` (ajuste os valores):
 ```
 MONGO_URL="mongodb://localhost:27017"
 DB_NAME="gestao_materiais"
-CORS_ORIGINS="*"
+CORS_ORIGINS="http://localhost:3000"
 JWT_SECRET="troque-por-uma-chave-hex-aleatoria-de-64-caracteres"
 ADMIN_EMAIL="seu-email@empresa.com"
 ADMIN_PASSWORD="uma-senha-forte"
@@ -92,8 +92,9 @@ yarn start
 Abre em `http://localhost:3000`.
 
 ## Acesso ao painel admin
-- Clique no **logo** (topo) ou acesse `/admin/login`
-- Use o `ADMIN_EMAIL` / `ADMIN_PASSWORD` definidos no `.env`
+- Acesse diretamente `/admin/login`
+- Use o `ADMIN_EMAIL` / `ADMIN_PASSWORD` definidos no ambiente
+- O logo do portal sempre volta para a página inicial
 
 ## Principais funcionalidades
 - Portal público de abertura de chamados (exige matrícula, e-mail e empresa)
@@ -108,6 +109,9 @@ Abre em `http://localhost:3000`.
 ## Notas técnicas
 - Autenticação JWT em cookies httpOnly (access 15min / refresh 7 dias)
 - Proteção contra brute force no login e throttle no "esqueci a senha"
+- Cookies httpOnly + proteção de origem em operações autenticadas
+- Respostas públicas de acompanhamento usam payload mínimo, sem dados internos do solicitante
+- Uploads limitados a 10MB e extensões permitidas; downloads usam `nosniff`
 - MongoDB: coleções `users`, `categories`, `tickets`, `counters`, `login_attempts`, `password_reset_tokens`, `password_reset_requests`
 
 
@@ -133,3 +137,13 @@ Há um `render.yaml` pronto na raiz. Ao criar o Blueprint, informe as variáveis
 - As dependências Python foram reduzidas às bibliotecas realmente usadas pelo projeto.
 
 > Em serviços com disco efêmero, configure um disco persistente em `STORAGE_DIR` ou um storage externo para preservar anexos após reinícios/deploys.
+
+## Quality Gate
+
+A branch de evolução inclui GitHub Actions para validar automaticamente:
+- build de produção do frontend;
+- compilação/import do backend;
+- testes de privacidade dos serializers públicos;
+- bloqueio de path traversal no storage local.
+
+Isso reduz a chance de uma alteração visual ou de segurança chegar ao deploy quebrando o sistema.
