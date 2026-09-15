@@ -25,7 +25,7 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (!needsSession) {
-      if (user === null) setUser(false);
+      setUser((current) => (current === null ? false : current));
       return;
     }
     if (checkedSession.current) return;
