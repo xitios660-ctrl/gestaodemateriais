@@ -1,6 +1,14 @@
 import pytest
 
-from server import ser_category_public, ser_ticket_public, _safe_local_path
+from fastapi import HTTPException
+from server import (
+    MIN_PASSWORD_LENGTH,
+    _assert_safe_email,
+    _safe_local_path,
+    as_object_id,
+    ser_category_public,
+    ser_ticket_public,
+)
 
 
 def test_public_category_hides_internal_owner_emails():
@@ -43,3 +51,35 @@ def test_public_ticket_exposes_only_tracking_fields():
 def test_safe_local_path_rejects_traversal():
     with pytest.raises(ValueError):
         _safe_local_path("../../etc/passwd")
+
+
+
+def test_invalid_object_id_becomes_safe_404():
+    with pytest.raises(HTTPException) as exc:
+        as_object_id("not-an-object-id", "Item não encontrado")
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Item não encontrado"
+
+
+def test_valid_object_id_is_accepted():
+    oid = as_object_id("507f1f77bcf86cd799439011")
+    assert str(oid) == "507f1f77bcf86cd799439011"
+
+
+def test_password_policy_is_not_trivially_short():
+    assert MIN_PASSWORD_LENGTH >= 8
+
+
+def test_email_guard_rejects_insecure_http_links():
+    with pytest.raises(ValueError):
+        _assert_safe_email(
+            "Aviso",
+            '<p><a href="http://example.com/reset">Redefinir</a></p>',
+        )
+
+
+def test_email_guard_accepts_safe_https_link():
+    _assert_safe_email(
+        "Aviso",
+        '<p><a href="https://example.com/reset">Redefinir acesso</a></p>',
+    )
