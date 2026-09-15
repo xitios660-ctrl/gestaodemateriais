@@ -28,7 +28,7 @@ import httpx
 import requests
 from fastapi import FastAPI, APIRouter, Request, Response, HTTPException, Depends, UploadFile, File, Form, BackgroundTasks
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import Response as StarletteResponse, FileResponse
+from starlette.responses import Response as StarletteResponse, FileResponse, JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict, EmailStr
 from bson import ObjectId
@@ -748,7 +748,11 @@ async def get_category(cat_id: str):
 
 @api_router.get("/categories/{cat_id}/template")
 async def category_template(cat_id: str):
-    doc = await db.categories.find_one({"_id": ObjectId(cat_id)})
+    try:
+        oid = ObjectId(cat_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Modelo não disponível")
+    doc = await db.categories.find_one({"_id": oid, "active": True})
     cols = (doc or {}).get("template_columns") or []
     if not doc or not cols:
         raise HTTPException(status_code=404, detail="Modelo não disponível")
@@ -764,11 +768,12 @@ async def category_template(cat_id: str):
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
-    fname = doc.get("template_filename") or "modelo.xlsx"
+    fname = os.path.basename(doc.get("template_filename") or "modelo.xlsx").replace("\r", "").replace("\n", "").replace('"', "")
     return StarletteResponse(
         content=buf.read(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                 "X-Content-Type-Options": "nosniff"},
     )
 
 
@@ -1196,6 +1201,24 @@ allowed_origins = list(dict.fromkeys([
     "http://127.0.0.1:3000",
     *configured_origins,
 ]))
+
+
+@app.middleware("http")
+async def security_headers_and_origin_guard(request: Request, call_next):
+    unsafe_method = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    has_session_cookie = bool(request.cookies.get("access_token") or request.cookies.get("refresh_token"))
+    if request.url.path.startswith("/api/") and unsafe_method and has_session_cookie:
+        origin = (request.headers.get("origin") or "").rstrip("/")
+        if origin and origin not in allowed_origins:
+            return JSONResponse(status_code=403, content={"detail": "Origem da requisição não permitida"})
+
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,
