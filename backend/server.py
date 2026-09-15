@@ -1092,9 +1092,23 @@ async def download_file(path: str, user: dict = Depends(get_current_user)):
 @api_router.get("/admin/stats")
 async def admin_stats(user: dict = Depends(get_current_user)):
     match = scope_match(user)
+    active_statuses = ["aberto", "em_analise", "em_andamento"]
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    due_soon_iso = (now + timedelta(hours=6)).isoformat()
     total = await db.tickets.count_documents(match)
-    open_count = await db.tickets.count_documents({**match, "status": {"$in": ["aberto", "em_analise", "em_andamento"]}})
+    open_count = await db.tickets.count_documents({**match, "status": {"$in": active_statuses}})
     done = await db.tickets.count_documents({**match, "status": "concluido"})
+    overdue = await db.tickets.count_documents({
+        **match,
+        "status": {"$in": active_statuses},
+        "due_at": {"$lt": now_iso},
+    })
+    due_soon = await db.tickets.count_documents({
+        **match,
+        "status": {"$in": active_statuses},
+        "due_at": {"$gte": now_iso, "$lte": due_soon_iso},
+    })
     by_cat = await db.tickets.aggregate([
         {"$match": match},
         {"$group": {"_id": "$category_name", "count": {"$sum": 1}}},
@@ -1108,6 +1122,8 @@ async def admin_stats(user: dict = Depends(get_current_user)):
         "total": total,
         "open": open_count,
         "done": done,
+        "overdue": overdue,
+        "due_soon": due_soon,
         "by_category": [{"name": c["_id"], "count": c["count"]} for c in by_cat],
         "by_status": [{"status": s["_id"], "label": STATUS_LABELS.get(s["_id"], s["_id"]), "count": s["count"]} for s in by_status],
     }
