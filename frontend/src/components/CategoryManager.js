@@ -161,7 +161,7 @@ export default function CategoryManager({ categories, onChange }) {
               <Button variant="outline" size="sm" data-testid={`edit-category-${c.id}`} onClick={() => openEdit(c)} className="flex-1 border-purple-200 text-purple-700 hover:bg-purple-50 gap-1.5">
                 <Pencil className="w-3.5 h-3.5" /> Editar
               </Button>
-              <Button variant="outline" size="sm" data-testid={`delete-category-${c.id}`} onClick={() => setDeleteTarget(c)} className="border-rose-200 text-rose-600 hover:bg-rose-50">
+              <Button variant="outline" size="sm" data-testid={`delete-category-${c.id}`} aria-label={`Remover categoria ${c.name}`} onClick={() => setDeleteTarget(c)} className="border-rose-200 text-rose-600 hover:bg-rose-50">
                 <Trash2 className="w-3.5 h-3.5" />
               </Button>
             </div>
@@ -231,7 +231,7 @@ export default function CategoryManager({ categories, onChange }) {
                 {form.owners.map((o) => (
                   <span key={o} className="inline-flex items-center gap-1.5 bg-purple-50 text-purple-700 text-sm px-3 py-1 rounded-full">
                     {o}
-                    <button type="button" onClick={() => setForm((f) => ({ ...f, owners: f.owners.filter((x) => x !== o) }))}>
+                    <button type="button" aria-label={`Remover responsável ${o}`} onClick={() => setForm((f) => ({ ...f, owners: f.owners.filter((x) => x !== o) }))}>
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </span>
@@ -275,7 +275,7 @@ export default function CategoryManager({ categories, onChange }) {
                           {FIELD_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
                         </SelectContent>
                       </Select>
-                      <button type="button" onClick={() => removeField(f.id)} className="text-slate-400 hover:text-rose-500">
+                      <button type="button" aria-label={`Remover campo ${f.label || "sem título"}`} onClick={() => removeField(f.id)} className="text-slate-400 hover:text-rose-500">
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
