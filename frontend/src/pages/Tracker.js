@@ -182,6 +182,7 @@ export default function Tracker() {
                   <div className="mt-5 pt-4 border-t border-slate-100 flex flex-wrap gap-x-6 gap-y-2 text-xs text-slate-500">
                     <span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> Aberto em {fmt(t.created_at)}</span>
                     <span>Prazo estimado: {t.lead_time_hours}h</span>
+                    {t.due_at && <span>Previsão: {fmt(t.due_at)}</span>}
                   </div>
                 </motion.article>
               ))}
