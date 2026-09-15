@@ -78,6 +78,7 @@ SMTP_STARTTLS = (os.environ.get("SMTP_STARTTLS") or "true").strip().lower() in (
 BREVO_API_KEY = (os.environ.get("BREVO_API_KEY") or "").strip()
 BREVO_SENDER_EMAIL = (os.environ.get("BREVO_SENDER_EMAIL") or "").strip().lower()
 BREVO_SENDER_NAME = (os.environ.get("BREVO_SENDER_NAME") or EMAIL_FROM_NAME).strip()
+EMAIL_STATUS_SELF_TEST_TICKET_ID = (os.environ.get("EMAIL_STATUS_SELF_TEST_TICKET_ID") or "").strip()
 DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
 PRIMARY_NOTIFICATION_EMAIL = (os.environ.get("PRIMARY_NOTIFICATION_EMAIL") or DEFAULT_OWNER_EMAIL).strip().lower()
 DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
@@ -1787,6 +1788,37 @@ async def startup():
     await seed_admin()
     await seed_categories()
     logger.info("Email delivery configured: %s", "yes" if email_delivery_configured() else "no")
+    if EMAIL_STATUS_SELF_TEST_TICKET_ID and ObjectId.is_valid(EMAIL_STATUS_SELF_TEST_TICKET_ID):
+        test_oid = ObjectId(EMAIL_STATUS_SELF_TEST_TICKET_ID)
+        test_ticket = await db.tickets.find_one({
+            "_id": test_oid,
+            "selftest_status_done": {"$ne": True},
+        })
+        if test_ticket:
+            previous_status = test_ticket.get("status") or "aberto"
+            now = datetime.now(timezone.utc).isoformat()
+            await db.tickets.update_one(
+                {"_id": test_oid},
+                {
+                    "$set": {"status": "em_analise", "selftest_status_done": True},
+                    "$push": {
+                        "history": {
+                            "status": "em_analise",
+                            "at": now,
+                            "note": "Teste automático de notificação por e-mail",
+                            "by": "Sistema de teste",
+                        }
+                    },
+                },
+            )
+            test_ticket = await db.tickets.find_one({"_id": test_oid})
+            sent = await send_status_update_email(
+                dict(test_ticket),
+                previous_status,
+                "em_analise",
+                "Teste automático de notificação de status",
+            )
+            logger.info("Status email self-test: %s", "sent" if sent else "failed")
     try:
         await init_storage()
         logger.info("Storage inicializado (%s)", "Emergent" if EMERGENT_KEY else f"local: {LOCAL_STORAGE_DIR}")
