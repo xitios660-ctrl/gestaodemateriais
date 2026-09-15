@@ -1531,28 +1531,73 @@ DEFAULT_CATEGORIES = [
 async def seed_admin():
     admin_email = (os.environ.get("ADMIN_EMAIL") or "").strip().lower()
     admin_password = os.environ.get("ADMIN_PASSWORD") or ""
+    admin_password_hash = (os.environ.get("ADMIN_PASSWORD_HASH") or "").strip()
+    bootstrap_version = (os.environ.get("ADMIN_BOOTSTRAP_VERSION") or "").strip()
     is_production = bool(os.environ.get("RENDER") or os.environ.get("ENVIRONMENT") == "production")
-    if not admin_email or not admin_password:
+
+    if not admin_email:
         if is_production:
-            raise RuntimeError("ADMIN_EMAIL e ADMIN_PASSWORD devem ser configurados em produção")
+            raise RuntimeError("ADMIN_EMAIL deve ser configurado em produção")
         admin_email = "admin@example.com"
-        admin_password = "dev-only-admin-password"
-    if len(admin_password) < 12 and is_production:
-        raise RuntimeError("ADMIN_PASSWORD deve ter ao menos 12 caracteres em produção")
+
+    if not admin_password_hash:
+        if not admin_password:
+            if is_production:
+                raise RuntimeError("ADMIN_PASSWORD ou ADMIN_PASSWORD_HASH deve ser configurado em produção")
+            admin_password = "dev-only-admin-password"
+        if len(admin_password) < MIN_PASSWORD_LENGTH:
+            raise RuntimeError(f"ADMIN_PASSWORD deve ter ao menos {MIN_PASSWORD_LENGTH} caracteres")
+        admin_password_hash = hash_password(admin_password)
+    elif not admin_password_hash.startswith(("$2a$", "$2b$", "$2y$")):
+        raise RuntimeError("ADMIN_PASSWORD_HASH inválido")
+
     existing = await db.users.find_one({"email": admin_email})
     if existing is None:
+        conflicting = await db.users.find_one({"email": admin_email})
+        if conflicting is not None:
+            raise RuntimeError("ADMIN_EMAIL já pertence a outra conta")
+
         any_admin = await db.users.find_one({"role": "admin"})
         if any_admin is not None:
-            logger.info("Admin account already exists under a different e-mail; bootstrap skipped")
+            await db.users.update_one(
+                {"_id": any_admin["_id"]},
+                {"$set": {
+                    "email": admin_email,
+                    "password_hash": admin_password_hash,
+                    "bootstrap_version": bootstrap_version,
+                }, "$inc": {"token_version": 1}},
+            )
+            await db.login_attempts.delete_many({"email": admin_email})
+            logger.info("Admin bootstrap credentials synchronized")
             return
+
         await db.users.insert_one({
-            "email": admin_email, "password_hash": hash_password(admin_password),
-            "name": "Administrador", "role": "admin", "token_version": 0,
+            "email": admin_email,
+            "password_hash": admin_password_hash,
+            "name": "Administrador",
+            "role": "admin",
+            "token_version": 0,
+            "bootstrap_version": bootstrap_version,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Admin seeded")
+        return
+
+    if existing.get("role") != "admin":
+        raise RuntimeError("ADMIN_EMAIL pertence a uma conta sem privilégio de administrador")
+
+    if bootstrap_version and existing.get("bootstrap_version") != bootstrap_version:
+        await db.users.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {
+                "password_hash": admin_password_hash,
+                "bootstrap_version": bootstrap_version,
+            }, "$inc": {"token_version": 1}},
+        )
+        await db.login_attempts.delete_many({"email": admin_email})
+        logger.info("Admin bootstrap password synchronized")
     else:
-        logger.info("Admin account already exists; bootstrap credentials were not reapplied")
+        logger.info("Admin account already exists; bootstrap already current")
 
 
 async def seed_categories():
