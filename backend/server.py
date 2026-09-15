@@ -1590,6 +1590,7 @@ async def startup():
     await db.audit_logs.create_index([("actor_id", 1), ("created_at", -1)])
     await seed_admin()
     await seed_categories()
+    logger.info("Email delivery configured: %s", "yes" if email_delivery_configured() else "no")
     try:
         await init_storage()
         logger.info("Storage inicializado (%s)", "Emergent" if EMERGENT_KEY else f"local: {LOCAL_STORAGE_DIR}")
