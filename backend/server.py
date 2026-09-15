@@ -227,6 +227,19 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
+async def validate_category_ids(category_ids: List[str]) -> List[str]:
+    normalized = list(dict.fromkeys(str(value) for value in (category_ids or [])))
+    if not normalized:
+        return []
+    if any(not ObjectId.is_valid(value) for value in normalized):
+        raise HTTPException(status_code=400, detail="Uma das categorias informadas é inválida")
+    object_ids = [ObjectId(value) for value in normalized]
+    found = await db.categories.count_documents({"_id": {"$in": object_ids}})
+    if found != len(object_ids):
+        raise HTTPException(status_code=400, detail="Uma das categorias informadas não existe")
+    return normalized
+
+
 def scope_match(user: dict) -> dict:
     """Empty for admins; category filter for scoped responsáveis."""
     if user.get("role") == "admin":
@@ -689,10 +702,11 @@ async def create_user(payload: UserCreate, background_tasks: BackgroundTasks, us
     else:
         pw_hash = hash_password(secrets.token_urlsafe(16))
     role = payload.role if payload.role in ("admin", "responsavel") else "responsavel"
+    categories = [] if role == "admin" else await validate_category_ids(payload.categories)
     doc = {
         "email": email, "password_hash": pw_hash,
         "name": payload.name.strip() or "Responsável", "role": role,
-        "categories": payload.categories or [],
+        "categories": categories,
         "token_version": 0, "created_at": datetime.now(timezone.utc).isoformat(),
     }
     res = await db.users.insert_one(doc)
@@ -723,11 +737,26 @@ async def update_user(uid: str, payload: UserUpdate, user: dict = Depends(requir
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
     updates = {}
     if payload.name is not None:
-        updates["name"] = payload.name.strip()
-    if payload.role is not None and payload.role in ("admin", "responsavel"):
-        updates["role"] = payload.role
-    if payload.categories is not None:
-        updates["categories"] = payload.categories
+        cleaned_name = payload.name.strip()
+        if not cleaned_name:
+            raise HTTPException(status_code=400, detail="O nome do usuário é obrigatório")
+        updates["name"] = cleaned_name
+
+    next_role = payload.role or target.get("role", "responsavel")
+    if target.get("role") == "admin" and next_role != "admin":
+        admin_count = await db.users.count_documents({"role": "admin"})
+        if admin_count <= 1:
+            raise HTTPException(status_code=400, detail="Deve existir ao menos um administrador")
+
+    if payload.role is not None:
+        updates["role"] = next_role
+
+    if next_role == "admin":
+        if payload.categories is not None or payload.role == "admin":
+            updates["categories"] = []
+    elif payload.categories is not None:
+        updates["categories"] = await validate_category_ids(payload.categories)
+
     inc = {}
     if payload.password:
         if len(payload.password) < MIN_PASSWORD_LENGTH:
@@ -758,6 +787,10 @@ async def delete_user(uid: str, user: dict = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="Você não pode remover seu próprio usuário")
     if await db.users.count_documents({}) <= 1:
         raise HTTPException(status_code=400, detail="Deve existir ao menos um usuário")
+    if target.get("role") == "admin":
+        admin_count = await db.users.count_documents({"role": "admin"})
+        if admin_count <= 1:
+            raise HTTPException(status_code=400, detail="Deve existir ao menos um administrador")
     await db.users.delete_one({"_id": oid})
     await write_audit(user, "user.delete", "user", uid, {
         "email": target.get("email", ""),
@@ -964,6 +997,7 @@ async def delete_category(cat_id: str, user: dict = Depends(require_admin)):
     result = await db.categories.delete_one({"_id": oid})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    await db.users.update_many({}, {"$pull": {"categories": cat_id}})
     await write_audit(user, "category.delete", "category", cat_id, {
         "name": target.get("name", ""),
     })
