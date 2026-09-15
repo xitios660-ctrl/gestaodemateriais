@@ -8,18 +8,22 @@ export function AuthProvider({ children }) {
   const location = useLocation();
   const needsSession = location.pathname.startsWith("/admin");
   const checkedSession = useRef(false);
+  const sessionGeneration = useRef(0);
+  const [sessionChecked, setSessionChecked] = useState(false);
   const [user, setUser] = useState(null); // null = unknown, false = anon, object = user
   const [loading, setLoading] = useState(false);
 
   const checkSession = async () => {
+    const generation = sessionGeneration.current;
     setLoading(true);
     try {
-      const { data } = await api.get("/auth/me");
-      setUser(data);
+      const { data } = await api.get("/auth/me", { _sessionProbe: true });
+      if (generation === sessionGeneration.current) setUser(data);
     } catch {
-      setUser(false);
+      if (generation === sessionGeneration.current) setUser(false);
     } finally {
       setLoading(false);
+      setSessionChecked(true);
     }
   };
 
@@ -42,12 +46,16 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const { data } = await api.post("/auth/login", { email, password });
+    sessionGeneration.current += 1;
     checkedSession.current = true;
+    setSessionChecked(true);
+    setLoading(false);
     setUser(data);
     return data;
   };
 
   const logout = async () => {
+    sessionGeneration.current += 1;
     try {
       await api.post("/auth/logout");
     } catch {}
@@ -55,7 +63,14 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        loading: loading || (needsSession && !sessionChecked),
+        login,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

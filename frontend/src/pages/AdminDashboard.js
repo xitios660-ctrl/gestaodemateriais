@@ -1,270 +1,162 @@
-import { useState, useEffect, useCallback, useMemo, useDeferredValue } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { api, formatApiErrorDetail } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { CategoryIcon, STATUS_STYLES, STATUS_LABELS } from "@/lib/ui";
-import { fadeUp, stagger, tap } from "@/lib/motion";
+import {
+  CategoryIcon,
+  STATUS_STYLES,
+  STATUS_LABELS,
+  fmt,
+  isOverdue,
+} from "@/lib/ui";
 import CategoryManager from "@/components/CategoryManager";
 import UserManager from "@/components/UserManager";
 import AuditManager from "@/components/AuditManager";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Brand } from "@/components/SiteHeader";
+import { EmptyState } from "@/components/Experience";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
 import { toast } from "sonner";
 import {
-  LogOut, LayoutGrid, Ticket, Search, Clock, CheckCircle2, Inbox,
-  TrendingUp, Download, Mail, Paperclip, Users, SlidersHorizontal, AlertTriangle,
-  ChevronRight, ChevronLeft, RefreshCw, X, Sparkles, History
+  LogOut,
+  LayoutGrid,
+  Ticket,
+  Search,
+  Loader2,
+  Clock3,
+  CheckCircle2,
+  Inbox,
+  Download,
+  Mail,
+  Paperclip,
+  Users,
+  ArrowUpRight,
+  RefreshCw,
+  ChartNoAxesCombined,
+  History,
+  ChevronLeft,
+  ChevronRight,
+  ShieldCheck,
+  AlertCircle,
+  X,
+  Check,
 } from "lucide-react";
-
-function fmt(dt) {
-  if (!dt) return "";
-  return new Date(dt).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+const PAGE_SIZE = 10;
+const STATUS_COLORS = {
+  aberto: "#d0ab63",
+  em_analise: "#b386d9",
+  em_andamento: "#81a6d7",
+  concluido: "#82bca7",
+  cancelado: "#c7879f",
+};
+const emptyFilters = {
+  status: "all",
+  category_id: "all",
+  search: "",
+  overdue: false,
+  due_soon: false,
+  start_date: "",
+  end_date: "",
+};
+const TITLES = {
+  overview: [
+    "Visão geral",
+    "Uma visão clara de tudo que precisa da sua atenção.",
+  ],
+  tickets: [
+    "Seus chamados",
+    "Do primeiro contato à solução. Acompanhe cada etapa.",
+  ],
+  categories: [
+    "Catálogo de serviços",
+    "Organize áreas, formulários e prazos de atendimento.",
+  ],
+  users: ["Sua equipe", "Pessoas certas, conectadas às demandas certas."],
+  audit: [
+    "Histórico de atividades",
+    "Acompanhe as alterações e os responsáveis por cada ação.",
+  ],
+};
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-
-function AnimatedNumber({ value = 0 }) {
-  const reduceMotion = useReducedMotion();
-  const [display, setDisplay] = useState(reduceMotion ? value : 0);
-
-  useEffect(() => {
-    if (reduceMotion) {
-      setDisplay(value);
-      return;
-    }
-    const start = performance.now();
-    const duration = 500;
-    const from = 0;
-    let frame;
-    const tick = (now) => {
-      const p = Math.min(1, (now - start) / duration);
-      const eased = 1 - Math.pow(1 - p, 3);
-      setDisplay(Math.round(from + (value - from) * eased));
-      if (p < 1) frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [value, reduceMotion]);
-
-  return <>{display}</>;
-}
-
-function StatCard({ icon: Icon, label, value, tone, detail }) {
-  return (
-    <motion.div variants={fadeUp} className="premium-card p-5 sm:p-6 group">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <span className="text-xs sm:text-sm font-medium text-slate-500">{label}</span>
-          <p className="mt-2 font-display text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-950">
-            <AnimatedNumber value={Number(value) || 0} />
-          </p>
-          {detail && <p className="mt-1 text-xs text-slate-400">{detail}</p>}
-        </div>
-        <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-transform duration-300 group-hover:scale-105 ${tone}`}>
-          <Icon className="w-5 h-5" />
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
-function DashboardSkeleton() {
-  return (
-    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 mb-6">
-      {[0, 1, 2, 3, 4].map((i) => (
-        <div key={i} className="premium-surface rounded-2xl p-5 h-28">
-          <div className="h-3 w-24 rounded skeleton-shimmer" />
-          <div className="h-8 w-14 rounded-lg skeleton-shimmer mt-4" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function InsightBars({ title, subtitle, items, getLabel }) {
-  const max = Math.max(1, ...items.map((item) => Number(item.count) || 0));
-  return (
-    <motion.div variants={fadeUp} className="premium-card p-5">
-      <div className="mb-4">
-        <h2 className="font-display text-sm font-bold text-slate-900">{title}</h2>
-        <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>
-      </div>
-      {items.length === 0 ? (
-        <p className="text-sm text-slate-400 py-5">Ainda não há dados suficientes.</p>
-      ) : (
-        <div className="space-y-3">
-          {items.slice(0, 5).map((item, index) => {
-            const value = Number(item.count) || 0;
-            const ratio = Math.max(0.04, value / max);
-            return (
-              <div key={item.name || item.status || index}>
-                <div className="flex items-center justify-between gap-3 text-xs mb-1.5">
-                  <span className="font-medium text-slate-600 truncate">{getLabel(item)}</span>
-                  <span className="font-bold text-slate-700 tabular-nums">{value}</span>
-                </div>
-                <div className="h-1.5 rounded-full bg-purple-50 overflow-hidden">
-                  <motion.div
-                    initial={{ scaleX: 0 }}
-                    animate={{ scaleX: ratio }}
-                    transition={{ duration: 0.45, delay: index * 0.04, ease: [0.16, 1, 0.3, 1] }}
-                    className="h-full w-full origin-left rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-500"
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </motion.div>
-  );
-}
-
-function RecentActivity({ items = [], onSelect }) {
-  return (
-    <motion.div variants={fadeUp} className="premium-card p-5">
-      <div className="mb-4">
-        <h2 className="font-display text-sm font-bold text-slate-900">Atividade recente</h2>
-        <p className="text-xs text-slate-400 mt-0.5">Últimos chamados registrados no sistema</p>
-      </div>
-      {items.length === 0 ? (
-        <p className="text-sm text-slate-400 py-5">Ainda não há atividade recente.</p>
-      ) : (
-        <div className="space-y-1">
-          {items.map((item) => (
-            <button
-              type="button"
-              key={item.id}
-              onClick={() => onSelect?.(item)}
-              className="w-full flex items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-purple-50/70 transition-colors"
-            >
-              <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
-                <CategoryIcon name={item.category_icon} className="w-4 h-4 text-purple-600" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="font-mono text-xs font-bold text-slate-800 truncate">{item.ticket_number}</p>
-                <p className="text-[11px] text-slate-400 truncate">{item.category_name} · {fmt(item.created_at)}</p>
-              </div>
-              <span className={`hidden sm:inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${STATUS_STYLES[item.status]}`}>
-                {item.status_label}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-    </motion.div>
-  );
-}
-
-function TicketListSkeleton() {
-  return (
-    <div className="premium-surface rounded-2xl p-4 sm:p-5 space-y-3">
-      {[0, 1, 2, 3, 4].map((i) => (
-        <div key={i} className="flex items-center gap-4 py-3">
-          <div className="h-10 w-10 rounded-xl skeleton-shimmer shrink-0" />
-          <div className="flex-1 space-y-2">
-            <div className="h-3 w-36 rounded skeleton-shimmer" />
-            <div className="h-3 w-52 max-w-full rounded skeleton-shimmer" />
-          </div>
-          <div className="h-7 w-20 rounded-full skeleton-shimmer hidden sm:block" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function MobileTicketCard({ ticket, onOpen }) {
-  return (
-    <motion.button
-      variants={fadeUp}
-      whileTap={tap}
-      type="button"
-      onClick={() => onOpen(ticket)}
-      className="w-full text-left premium-card p-4"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            {ticket.file && <Paperclip className="w-3.5 h-3.5 text-purple-500 shrink-0" />}
-            <span className="font-mono text-sm font-bold text-slate-900 truncate">{ticket.ticket_number}</span>
-          </div>
-          <div className="mt-2 flex items-center gap-2 text-sm text-slate-600 min-w-0">
-            <CategoryIcon name={ticket.category_icon} className="w-4 h-4 text-purple-500 shrink-0" />
-            <span className="truncate">{ticket.category_name}</span>
-          </div>
-        </div>
-        <ChevronRight className="w-4 h-4 text-slate-300 shrink-0 mt-1" />
-      </div>
-      <div className="mt-4 flex items-end justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-xs text-slate-500 truncate">{ticket.requester?.email || "Sem e-mail"}</p>
-          <p className="text-[11px] text-slate-400 mt-0.5">{fmt(ticket.created_at)}</p>
-        </div>
-        <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap ${STATUS_STYLES[ticket.status]}`}>
-          {ticket.status_label}
-        </span>
-      </div>
-    </motion.button>
-  );
-}
-
 export default function AdminDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const reduceMotion = useReducedMotion();
-  const [tab, setTab] = useState("tickets");
+  const reduced = useReducedMotion();
+  const [tab, setTab] = useState("overview");
   const [stats, setStats] = useState(null);
   const [tickets, setTickets] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [filters, setFilters] = useState({
-    status: "all",
-    category_id: "all",
-    search: "",
-    start_date: "",
-    end_date: "",
-  });
+  const [error, setError] = useState("");
+  const [auxError, setAuxError] = useState(false);
+  const [filters, setFilters] = useState(emptyFilters);
+  const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [pagination, setPagination] = useState({ total: 0, page: 1, pages: 1, limit: 50 });
+  const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState(null);
-  const deferredSearch = useDeferredValue(filters.search);
-
-  const ticketParams = useMemo(() => ({
-    status: filters.status,
-    category_id: filters.category_id,
-    search: deferredSearch,
-    start_date: filters.start_date || undefined,
-    end_date: filters.end_date || undefined,
-    page,
-    limit: 50,
-    paginated: true,
-  }), [filters.status, filters.category_id, filters.start_date, filters.end_date, deferredSearch, page]);
-
-  const loadTickets = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const [newStatus, setNewStatus] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const listController = useRef(null);
+  const detailController = useRef(null);
+  const saveLock = useRef(false);
+  const applyFilters = (patch) => {
+    setFilters((f) => ({ ...f, ...patch }));
+    setPage(1);
+  };
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setFilters((f) => (f.search === search ? f : { ...f, search }));
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+  const loadTickets = useCallback(async () => {
+    listController.current?.abort();
+    const controller = new AbortController();
+    listController.current = controller;
+    setLoading(true);
+    setError("");
     try {
-      const { data } = await api.get("/tickets", { params: ticketParams });
-      if (Array.isArray(data)) {
-        setTickets(data);
-        setPagination({ total: data.length, page: 1, pages: 1, limit: data.length || 50 });
-      } else {
-        setTickets(data.items || []);
-        setPagination({
-          total: data.total || 0,
-          page: data.page || 1,
-          pages: data.pages || 1,
-          limit: data.limit || 50,
-        });
-      }
-    } catch (err) {
-      toast.error(formatApiErrorDetail(err.response?.data?.detail) || "Não foi possível carregar os chamados");
+      const { data } = await api.get("/tickets", {
+        params: {
+          ...filters,
+          limit: PAGE_SIZE,
+          page,
+          paginated: true,
+        },
+        signal: controller.signal,
+      });
+      setTickets(data.items);
+      setTotal(data.total);
+      if (page > data.pages) setPage(data.pages);
+    } catch (e) {
+      if (e.code !== "ERR_CANCELED")
+        setError(
+          e.response
+            ? formatApiErrorDetail(e.response.data?.detail)
+            : "Não foi possível carregar os chamados. Tente atualizar.",
+        );
     } finally {
-      if (!silent) setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
-  }, [ticketParams]);
-
+  }, [filters, page]);
   const loadAux = useCallback(async () => {
     try {
       const [s, c] = await Promise.all([
@@ -273,514 +165,835 @@ export default function AdminDashboard() {
       ]);
       setStats(s.data);
       setCategories(c.data);
+      setAuxError(false);
     } catch {
-      toast.error("Não foi possível atualizar os indicadores");
+      setAuxError(true);
     }
   }, []);
-
-  useEffect(() => { loadAux(); }, [loadAux]);
-  useEffect(() => { loadTickets(); }, [loadTickets]);
-
-  const activeFilters = useMemo(
-    () => [
-      filters.status !== "all",
-      filters.category_id !== "all",
-      !!filters.search.trim(),
-      !!filters.start_date,
-      !!filters.end_date,
-    ].filter(Boolean).length,
-    [filters]
-  );
-
-  const updateFilter = (patch) => {
-    setPage(1);
-    setFilters((current) => ({ ...current, ...patch }));
+  useEffect(() => {
+    loadAux();
+  }, [loadAux]);
+  useEffect(() => {
+    loadTickets();
+    return () => listController.current?.abort();
+  }, [loadTickets]);
+  useEffect(() => () => detailController.current?.abort(), []);
+  const refresh = () => {
+    loadTickets();
+    loadAux();
   };
-
-  const clearFilters = () => {
-    setPage(1);
-    setFilters({ status: "all", category_id: "all", search: "", start_date: "", end_date: "" });
+  const openTicket = async (t) => {
+    detailController.current?.abort();
+    const controller = new AbortController();
+    detailController.current = controller;
+    setSelected(t);
+    setNewStatus(t.status);
+    setNote("");
+    setDetailError("");
+    setDetailLoading(true);
+    try {
+      const { data } = await api.get(`/tickets/${t.id}`, {
+        signal: controller.signal,
+      });
+      setSelected(data);
+      setNewStatus(data.status);
+    } catch (e) {
+      if (e.code !== "ERR_CANCELED")
+        setDetailError("Não foi possível atualizar os detalhes deste chamado.");
+    } finally {
+      if (!controller.signal.aborted) setDetailLoading(false);
+    }
   };
-
-  const refreshAll = async () => {
-    setRefreshing(true);
-    await Promise.all([loadTickets(true), loadAux()]);
-    setRefreshing(false);
-    toast.success("Painel atualizado");
+  const closeDetail = () => {
+    detailController.current?.abort();
+    setSelected(null);
   };
-
-  const exportReport = async () => {
+  const changeStatus = async () => {
+    if (
+      !selected ||
+      saveLock.current ||
+      (newStatus === selected.status && !note.trim())
+    )
+      return;
+    saveLock.current = true;
+    setSaving(true);
+    try {
+      const { data } = await api.patch(`/tickets/${selected.id}/status`, {
+        status: newStatus,
+        note: note.trim(),
+      });
+      setSelected(data);
+      setNote("");
+      toast.success("Chamado atualizado.");
+      refresh();
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e.response?.data?.detail));
+    } finally {
+      saveLock.current = false;
+      setSaving(false);
+    }
+  };
+  const downloadFile = async () => {
+    try {
+      const { data } = await api.get(`/files/${selected.file.storage_path}`, {
+        responseType: "blob",
+      });
+      saveBlob(data, selected.file.original_filename || "anexo");
+    } catch {
+      toast.error("Não foi possível baixar o anexo.");
+    }
+  };
+  const exportCsv = async () => {
     if (exporting) return;
     setExporting(true);
     try {
-      const params = {
-        status: filters.status,
-        category_id: filters.category_id,
-        search: filters.search.trim() || undefined,
-        start_date: filters.start_date || undefined,
-        end_date: filters.end_date || undefined,
-      };
-      const response = await api.get("/admin/reports/tickets.csv", {
-        params,
+      const { data } = await api.get("/admin/reports/tickets.csv", {
+        params: { ...filters, search: search.trim() },
         responseType: "blob",
       });
-      const url = URL.createObjectURL(response.data);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `relatorio-chamados-${new Date().toISOString().slice(0, 10)}.csv`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      toast.success("Relatório exportado");
-    } catch (err) {
-      toast.error(formatApiErrorDetail(err.response?.data?.detail) || "Não foi possível exportar o relatório");
+      saveBlob(data, `chamados-${new Date().toISOString().slice(0, 10)}.csv`);
+      toast.success("Relatório exportado com os filtros selecionados.");
+    } catch (e) {
+      let detail;
+      try {
+        detail = JSON.parse(await e.response.data.text()).detail;
+      } catch {}
+      toast.error(
+        detail
+          ? formatApiErrorDetail(detail)
+          : "Não foi possível exportar os chamados.",
+      );
     } finally {
       setExporting(false);
     }
   };
-
-  const changeStatus = async (ticketId, status) => {
-    try {
-      const { data } = await api.patch(`/tickets/${ticketId}/status`, { status });
-      setSelected(data);
-      toast.success("Status atualizado");
-      await Promise.all([loadTickets(true), loadAux()]);
-    } catch (err) {
-      toast.error(formatApiErrorDetail(err.response?.data?.detail) || "Não foi possível atualizar o status");
-    }
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const hasFilters =
+    filters.status !== "all" ||
+    filters.category_id !== "all" ||
+    search ||
+    filters.overdue ||
+    filters.due_soon ||
+    filters.start_date ||
+    filters.end_date;
+  const goTab = (value) => {
+    setTab(value);
   };
-
-  const downloadFile = async (t) => {
-    try {
-      const resp = await api.get(`/files/${t.file.storage_path}`, { responseType: "blob" });
-      const url = URL.createObjectURL(resp.data);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = t.file.original_filename || "arquivo";
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      toast.error("Falha ao baixar arquivo");
-    }
-  };
-
-  const tabs = [
-    { id: "tickets", label: "Chamados", icon: Ticket, visible: true },
-    { id: "categories", label: "Categorias", icon: LayoutGrid, visible: user?.role === "admin" },
-    { id: "users", label: "Usuários", icon: Users, visible: user?.role === "admin" },
-    { id: "audit", label: "Auditoria", icon: History, visible: user?.role === "admin" },
-  ].filter((item) => item.visible);
-
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-40 border-b border-purple-100/70 bg-white/85 backdrop-blur-xl">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <img src="/vivo-logo.jpeg" alt="Vivo" className="w-9 h-9 rounded-xl object-cover shadow-lg shadow-purple-500/20" />
-            <div className="leading-tight min-w-0">
-              <p className="font-display font-extrabold text-slate-950 text-sm sm:text-base truncate">Gestão de Materiais</p>
-              <p className="text-[11px] text-slate-400 -mt-0.5 truncate">Painel administrativo · {user?.email}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={refreshAll}
-              disabled={refreshing}
-              aria-label="Atualizar painel"
-              className="rounded-xl text-slate-500 hover:text-purple-700 hover:bg-purple-50"
-            >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-            </Button>
-            <Button
-              variant="ghost"
+    <div className="admin-shell">
+      <header className="admin-topbar">
+        <div className="shell admin-topbar-inner">
+          <Link to="/" className="brand">
+            <Brand />
+          </Link>
+          <div className="admin-topbar-actions">
+            <span className="admin-user">{user?.name || user?.email}</span>
+            <Link to="/" className="button button-quiet">
+              Ver portal <ArrowUpRight size={14} />
+            </Link>
+            <button
+              className="button button-quiet"
               data-testid="admin-logout-button"
-              onClick={async () => { await logout(); navigate("/admin/login"); }}
-              className="text-slate-600 hover:text-rose-600 hover:bg-rose-50 gap-2 rounded-xl px-3"
+              onClick={async () => {
+                await logout();
+                navigate("/admin/login");
+              }}
             >
-              <LogOut className="w-4 h-4" />
-              <span className="hidden sm:inline">Sair</span>
-            </Button>
+              <LogOut size={14} /> Sair
+            </button>
           </div>
         </div>
       </header>
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        <section className="mb-6 sm:mb-8">
-          <div className="flex items-end justify-between gap-4 mb-5">
-            <div>
-              <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-100 rounded-full px-2.5 py-1 mb-2">
-                <Sparkles className="w-3.5 h-3.5" /> Visão operacional
-              </div>
-              <h1 className="font-display text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-950">
-                Central de atendimento
-              </h1>
-              <p className="text-sm text-slate-500 mt-1">Acompanhe, filtre e resolva solicitações em um só lugar.</p>
-            </div>
-          </div>
-
-          <nav aria-label="Áreas administrativas" className="overflow-x-auto -mx-1 px-1 pb-1">
-            <div className="inline-flex p-1 rounded-2xl bg-white/80 border border-purple-100 shadow-sm min-w-max">
-              {tabs.map(({ id, label, icon: Icon }) => (
-                <button
-                  key={id}
-                  data-testid={`tab-${id}`}
-                  onClick={() => setTab(id)}
-                  className={`relative inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${tab === id ? "text-white" : "text-slate-600 hover:text-purple-700 hover:bg-purple-50"}`}
-                >
-                  {tab === id && (
-                    <motion.span
-                      layoutId={reduceMotion ? undefined : "admin-tab"}
-                      className="absolute inset-0 bg-[#660099] rounded-xl shadow-md shadow-purple-500/20"
-                      transition={{ type: "spring", stiffness: 450, damping: 36 }}
-                    />
-                  )}
-                  <Icon className="relative w-4 h-4" />
-                  <span className="relative">{label}</span>
-                </button>
-              ))}
-            </div>
-          </nav>
-        </section>
-
-        <AnimatePresence mode="wait" initial={false}>
-          {tab === "tickets" && (
-            <motion.section
-              key="tickets"
-              initial={reduceMotion ? false : { opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={reduceMotion ? undefined : { opacity: 0 }}
-              transition={{ duration: reduceMotion ? 0 : 0.22 }}
+      <div className="shell admin-layout">
+        <nav className="admin-sidebar" aria-label="Painel de gestão">
+          <p className="eyebrow">SEU ESPAÇO DE GESTÃO</p>
+          {[
+            { id: "overview", label: "Visão geral", icon: ChartNoAxesCombined },
+            { id: "tickets", label: "Chamados", icon: Ticket },
+            ...(user?.role === "admin"
+              ? [
+                  { id: "categories", label: "Categorias", icon: LayoutGrid },
+                  { id: "users", label: "Equipe", icon: Users },
+                  { id: "audit", label: "Atividades", icon: History },
+                ]
+              : []),
+          ].map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              className={tab === id ? "active" : ""}
+              aria-current={tab === id ? "page" : undefined}
+              onClick={() => goTab(id)}
+              data-testid={`tab-${id}`}
             >
-              {!stats ? (
-                <DashboardSkeleton />
-              ) : (
-                <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 mb-6">
-                  <StatCard icon={Inbox} label="Total" value={stats.total} tone="bg-purple-100 text-purple-700" detail="Chamados registrados" />
-                  <StatCard icon={Clock} label="Em aberto" value={stats.open} tone="bg-amber-100 text-amber-700" detail={stats.due_soon ? `${stats.due_soon} vencem em até 6h` : "Pedem atenção"} />
-                  <StatCard icon={AlertTriangle} label="SLA vencido" value={stats.overdue} tone={stats.overdue ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-500"} detail="Chamados ativos atrasados" />
-                  <StatCard icon={CheckCircle2} label="Concluídos" value={stats.done} tone="bg-emerald-100 text-emerald-700" detail="Atendimentos finalizados" />
-                  <StatCard icon={TrendingUp} label="Categorias" value={categories.length} tone="bg-sky-100 text-sky-700" detail="Áreas disponíveis" />
-                </motion.div>
-              )}
-
-              {stats && (
-                <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 mb-6">
-                  <InsightBars
-                    title="Distribuição por status"
-                    subtitle="Onde os chamados estão concentrados agora"
-                    items={stats.by_status || []}
-                    getLabel={(item) => item.label || STATUS_LABELS[item.status] || item.status}
-                  />
-                  <InsightBars
-                    title="Categorias mais acionadas"
-                    subtitle="Áreas com maior volume de solicitações"
-                    items={stats.by_category || []}
-                    getLabel={(item) => item.name || "Sem categoria"}
-                  />
-                  <RecentActivity
-                    items={stats.recent || []}
-                    onSelect={(item) => {
-                      const loaded = tickets.find((ticket) => ticket.id === item.id);
-                      if (loaded) setSelected(loaded);
-                      else updateFilter({ search: item.ticket_number });
-                    }}
-                  />
-                </motion.div>
-              )}
-
-              <div className="premium-surface rounded-2xl p-3 sm:p-4 mb-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <SlidersHorizontal className="w-4 h-4 text-purple-600" />
-                  <span className="text-sm font-semibold text-slate-800">Filtrar chamados</span>
-                  {activeFilters > 0 && (
-                    <span className="ml-auto text-[11px] font-bold text-purple-700 bg-purple-100 rounded-full px-2 py-0.5">
-                      {activeFilters} ativo{activeFilters > 1 ? "s" : ""}
-                    </span>
-                  )}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5">
-                  <div className="relative md:col-span-4">
-                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                    <Input
-                      data-testid="ticket-search-input"
-                      value={filters.search}
-                      onChange={(e) => updateFilter({ search: e.target.value })}
-                      placeholder="Número, e-mail, matrícula ou empresa"
-                      className="pl-9 bg-white border-purple-100 h-10"
-                    />
-                  </div>
-                  <div className="md:col-span-2">
-                    <Select value={filters.status} onValueChange={(v) => updateFilter({ status: v })}>
-                      <SelectTrigger data-testid="filter-status" className="w-full bg-white border-purple-100 h-10"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Todos os status</SelectItem>
-                        {Object.entries(STATUS_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="md:col-span-2">
-                    <Select value={filters.category_id} onValueChange={(v) => updateFilter({ category_id: v })}>
-                      <SelectTrigger data-testid="filter-category" className="w-full bg-white border-purple-100 h-10"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Todas categorias</SelectItem>
-                        {categories.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Input
-                    type="date"
-                    aria-label="Data inicial"
-                    data-testid="filter-start-date"
-                    value={filters.start_date}
-                    max={filters.end_date || undefined}
-                    onChange={(e) => updateFilter({ start_date: e.target.value })}
-                    className="md:col-span-2 bg-white border-purple-100 h-10"
-                  />
-                  <Input
-                    type="date"
-                    aria-label="Data final"
-                    data-testid="filter-end-date"
-                    value={filters.end_date}
-                    min={filters.start_date || undefined}
-                    onChange={(e) => updateFilter({ end_date: e.target.value })}
-                    className="md:col-span-2 bg-white border-purple-100 h-10"
-                  />
-                </div>
-                <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <p className="text-[11px] text-slate-400">O relatório respeita os filtros e as permissões desta conta.</p>
-                  <div className="flex items-center gap-2">
-                    {activeFilters > 0 && (
-                      <Button type="button" variant="ghost" onClick={clearFilters} className="h-9 px-3 text-slate-500 hover:text-purple-700">
-                        <X className="w-4 h-4 mr-1.5" /> Limpar
-                      </Button>
-                    )}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={exportReport}
-                      disabled={exporting}
-                      className="h-9 border-purple-200 text-purple-700 hover:bg-purple-50 gap-2"
-                    >
-                      {exporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                      {exporting ? "Exportando..." : "Exportar CSV"}
-                    </Button>
-                  </div>
-                </div>
+              <Icon size={16} />
+              {label}
+            </button>
+          ))}
+          <div className="sidebar-note">
+            <ShieldCheck size={18} />
+            Você está no espaço de{" "}
+            {user?.role === "admin" ? "administração" : "atendimento"}.<br />
+            Cada ação faz a diferença.
+          </div>
+        </nav>
+        <main id="main-content" className="admin-main">
+          <div className="admin-heading">
+            <div>
+              <p className="eyebrow">
+                GESTÃO DE MATERIAIS /{" "}
+                {user?.role === "admin" ? "ADMINISTRAÇÃO" : "ATENDIMENTO"}
+              </p>
+              <h1>{TITLES[tab][0]}</h1>
+              <p>{TITLES[tab][1]}</p>
+            </div>
+            {["overview", "tickets"].includes(tab) && (
+              <div className="admin-heading-actions">
+                <button
+                  className="button button-quiet"
+                  onClick={refresh}
+                  disabled={loading}
+                  aria-label="Atualizar painel"
+                >
+                  <RefreshCw
+                    size={14}
+                    className={loading ? "animate-spin" : ""}
+                  />{" "}
+                  Atualizar
+                </button>
+                <button
+                  className="button button-secondary"
+                  style={{ minHeight: 38, fontSize: 11, paddingInline: 14 }}
+                  onClick={exportCsv}
+                  disabled={exporting}
+                  data-testid="export-tickets"
+                >
+                  {exporting ? (
+                    <Loader2 className="animate-spin" size={14} />
+                  ) : (
+                    <Download size={14} />
+                  )}{" "}
+                  Exportar CSV
+                </button>
               </div>
-
-              {loading ? (
-                <TicketListSkeleton />
-              ) : tickets.length === 0 ? (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="premium-surface rounded-2xl py-14 px-6 text-center">
-                  <div className="w-12 h-12 rounded-2xl bg-purple-50 flex items-center justify-center mx-auto mb-4">
-                    <Search className="w-5 h-5 text-purple-500" />
-                  </div>
-                  <h2 className="font-display text-base font-bold text-slate-900">Nenhum chamado encontrado</h2>
-                  <p className="mt-1 text-sm text-slate-500">Tente ajustar os filtros ou limpar a busca atual.</p>
-                  {activeFilters > 0 && (
-                    <Button variant="outline" onClick={clearFilters} className="mt-4 border-purple-200 text-purple-700 hover:bg-purple-50">
-                      Limpar filtros
-                    </Button>
-                  )}
-                </motion.div>
-              ) : (
+            )}
+          </div>
+          {auxError && (
+            <div className="error-banner admin-error" role="alert">
+              <AlertCircle size={15} />
+              Não foi possível atualizar os indicadores e as categorias.
+              <button className="underline" onClick={loadAux}>
+                Tentar novamente
+              </button>
+            </div>
+          )}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={tab}
+              initial={reduced ? false : { opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reduced ? 0 : 0.22 }}
+            >
+              {tab === "overview" && (
                 <>
-                  <motion.div variants={stagger} initial="hidden" animate="show" className="md:hidden space-y-3" data-testid="admin-tickets-mobile">
-                    {tickets.map((t) => <MobileTicketCard key={t.id} ticket={t} onOpen={setSelected} />)}
-                  </motion.div>
-
-                  <div data-testid="admin-tickets-table" className="hidden md:block premium-surface rounded-2xl overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-purple-100/70 text-left text-[11px] uppercase tracking-[0.12em] text-slate-400 bg-slate-50/60">
-                          <th className="px-5 py-3.5 font-semibold">Chamado</th>
-                          <th className="px-5 py-3.5 font-semibold">Categoria</th>
-                          <th className="px-5 py-3.5 font-semibold">Solicitante</th>
-                          <th className="px-5 py-3.5 font-semibold hidden lg:table-cell">Aberto em</th>
-                          <th className="px-5 py-3.5 font-semibold">Status</th>
-                          <th className="w-12" aria-label="Abrir detalhes" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {tickets.map((t) => (
-                          <tr
-                            key={t.id}
-                            data-testid={`ticket-row-${t.ticket_number}`}
-                            onClick={() => setSelected(t)}
-                            className="border-b border-slate-100/80 last:border-0 hover:bg-purple-50/50 cursor-pointer transition-colors group"
-                          >
-                            <td className="px-5 py-4 font-mono font-semibold text-slate-900 whitespace-nowrap">
-                              {t.file && <Paperclip className="w-3.5 h-3.5 inline mr-1.5 text-purple-400" />}
-                              {t.ticket_number}
-                            </td>
-                            <td className="px-5 py-4">
-                              <span className="inline-flex items-center gap-1.5 text-slate-700">
-                                <CategoryIcon name={t.category_icon} className="w-4 h-4 text-purple-500" />
-                                {t.category_name}
-                              </span>
-                            </td>
-                            <td className="px-5 py-4 text-slate-600 max-w-[220px]">
-                              <span className="block truncate">{t.requester?.email}</span>
-                              <span className="block text-xs text-slate-400 truncate">{t.requester?.empresa}</span>
-                            </td>
-                            <td className="px-5 py-4 hidden lg:table-cell text-slate-500 whitespace-nowrap">{fmt(t.created_at)}</td>
-                            <td className="px-5 py-4">
-                              <span className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${STATUS_STYLES[t.status]}`}>{t.status_label}</span>
-                            </td>
-                            <td className="pr-4">
-                              <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-purple-500 group-hover:translate-x-0.5 transition-all" />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="admin-stats">
+                    {[
+                      {
+                        icon: Inbox,
+                        label: "Total de chamados",
+                        value: stats?.total,
+                        hint: "Todas as solicitações",
+                        filter: emptyFilters,
+                      },
+                      {
+                        icon: Clock3,
+                        label: "Em atendimento",
+                        value: stats?.open,
+                        hint: "Abertos, em análise e andamento",
+                        filter: { ...emptyFilters, status: "active" },
+                      },
+                      {
+                        icon: CheckCircle2,
+                        label: "Concluídos",
+                        value: stats?.done,
+                        hint: "Demandas resolvidas",
+                        filter: { ...emptyFilters, status: "concluido" },
+                      },
+                      {
+                        icon: AlertCircle,
+                        label: "Prazo excedido",
+                        value: stats?.overdue,
+                        hint: "Precisam de atenção",
+                        warn: true,
+                        filter: { ...emptyFilters, overdue: true },
+                      },
+                      {
+                        icon: Clock3,
+                        label: "Vencem em breve",
+                        value: stats?.due_soon,
+                        hint: "Nas próximas 6 horas",
+                        filter: { ...emptyFilters, due_soon: true },
+                      },
+                    ].map(
+                      ({ icon: Icon, label, value, hint, warn, filter }) => (
+                        <button
+                          key={label}
+                          className={`stat-card ${warn ? "warn" : ""}`}
+                          onClick={() => {
+                            setSearch("");
+                            applyFilters(filter);
+                            setTab("tickets");
+                          }}
+                        >
+                          <span className="stat-card-top">
+                            {label}
+                            <Icon />
+                          </span>
+                          <strong>{value ?? "—"}</strong>
+                          <small>{hint}</small>
+                        </button>
+                      ),
+                    )}
                   </div>
-
-                  {pagination.pages > 1 && (
-                    <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1">
-                      <p className="text-xs text-slate-400">
-                        {pagination.total} chamado{pagination.total === 1 ? "" : "s"} · página {pagination.page} de {pagination.pages}
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setPage((current) => Math.max(1, current - 1))}
-                          disabled={pagination.page <= 1 || loading}
-                          className="border-purple-100 text-slate-600 hover:text-purple-700 hover:bg-purple-50 gap-1.5"
-                        >
-                          <ChevronLeft className="w-4 h-4" /> Anterior
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setPage((current) => Math.min(pagination.pages, current + 1))}
-                          disabled={pagination.page >= pagination.pages || loading}
-                          className="border-purple-100 text-slate-600 hover:text-purple-700 hover:bg-purple-50 gap-1.5"
-                        >
-                          Próxima <ChevronRight className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  )}
+                  <div className="analytics-row">
+                    <section className="analytics-card">
+                      <h2>Panorama dos atendimentos</h2>
+                      {stats?.total > 0 ? (
+                        <>
+                          <div
+                            className="status-distribution"
+                            aria-label="Distribuição dos chamados por status"
+                          >
+                            {(stats.by_status || []).map((s) => (
+                              <motion.div
+                                key={s.status}
+                                initial={false}
+                                animate={{
+                                  width: `${(s.count / stats.total) * 100}%`,
+                                }}
+                                style={{ background: STATUS_COLORS[s.status] }}
+                                title={`${s.label}: ${s.count}`}
+                              />
+                            ))}
+                          </div>
+                          <div className="distribution-legend">
+                            {(stats.by_status || []).map((s) => (
+                              <span key={s.status}>
+                                <i
+                                  style={{
+                                    background: STATUS_COLORS[s.status],
+                                  }}
+                                />
+                                {STATUS_LABELS[s.status]}{" "}
+                                <strong>{s.count}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <p className="field-hint">
+                          Os indicadores aparecem assim que houver chamados.
+                        </p>
+                      )}
+                    </section>
+                    <section className="analytics-card">
+                      <h2>Demandas por categoria</h2>
+                      {stats?.by_category?.length ? (
+                        stats.by_category.slice(0, 5).map((c) => (
+                          <div key={c.name} className="category-bar">
+                            <span title={c.name}>{c.name}</span>
+                            <div>
+                              <motion.i
+                                initial={false}
+                                animate={{
+                                  width: `${(c.count / Math.max(1, stats.total)) * 100}%`,
+                                }}
+                              />
+                            </div>
+                            <strong>{c.count}</strong>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="field-hint">
+                          Nenhuma demanda registrada até o momento.
+                        </p>
+                      )}
+                    </section>
+                  </div>
                 </>
               )}
-            </motion.section>
-          )}
-
-          {tab === "categories" && (
-            <motion.section key="categories" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-              <CategoryManager categories={categories} onChange={loadAux} />
-            </motion.section>
-          )}
-
-          {tab === "users" && (
-            <motion.section key="users" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-              <UserManager />
-            </motion.section>
-          )}
-
-          {tab === "audit" && (
-            <motion.section key="audit" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-              <AuditManager />
-            </motion.section>
-          )}
-        </AnimatePresence>
-      </main>
-
-      <Sheet open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
-        <SheetContent className="w-full sm:max-w-lg overflow-y-auto bg-white">
+              {["overview", "tickets"].includes(tab) && (
+                <>
+                  <div className="admin-filters">
+                    <div className="search-field">
+                      <Search size={15} />
+                      <input
+                        aria-label="Buscar chamados"
+                        data-testid="ticket-search-input"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Protocolo, e-mail, matrícula ou empresa…"
+                        maxLength={254}
+                      />
+                      {search && (
+                        <button
+                          aria-label="Limpar busca"
+                          onClick={() => setSearch("")}
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+                    <select
+                      className="filter-select"
+                      aria-label="Filtrar por status"
+                      data-testid="filter-status"
+                      value={filters.status}
+                      onChange={(e) => applyFilters({ status: e.target.value })}
+                    >
+                      <option value="all">Todos os status</option>
+                      <option value="active">Em atendimento</option>
+                      {Object.entries(STATUS_LABELS).map(([k, v]) => (
+                        <option key={k} value={k}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="filter-select"
+                      aria-label="Filtrar por categoria"
+                      data-testid="filter-category"
+                      value={filters.category_id}
+                      onChange={(e) =>
+                        applyFilters({ category_id: e.target.value })
+                      }
+                    >
+                      <option value="all">Todas as categorias</option>
+                      {categories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                    <label className="date-filter">
+                      De
+                      <input
+                        type="date"
+                        aria-label="Data inicial"
+                        value={filters.start_date}
+                        max={filters.end_date || undefined}
+                        onChange={(e) =>
+                          applyFilters({ start_date: e.target.value })
+                        }
+                      />
+                    </label>
+                    <label className="date-filter">
+                      Até
+                      <input
+                        type="date"
+                        aria-label="Data final"
+                        value={filters.end_date}
+                        min={filters.start_date || undefined}
+                        onChange={(e) =>
+                          applyFilters({ end_date: e.target.value })
+                        }
+                      />
+                    </label>
+                    <select
+                      className="filter-select"
+                      aria-label="Filtrar por prazo"
+                      value={
+                        filters.overdue
+                          ? "overdue"
+                          : filters.due_soon
+                            ? "due_soon"
+                            : "all"
+                      }
+                      onChange={(e) =>
+                        applyFilters({
+                          overdue: e.target.value === "overdue",
+                          due_soon: e.target.value === "due_soon",
+                        })
+                      }
+                    >
+                      <option value="all">Todos os prazos</option>
+                      <option value="overdue">Prazo excedido</option>
+                      <option value="due_soon">Vencem em até 6h</option>
+                    </select>
+                    {hasFilters && (
+                      <button
+                        className="button button-quiet"
+                        onClick={() => {
+                          setSearch("");
+                          applyFilters(emptyFilters);
+                        }}
+                      >
+                        <X size={12} /> Limpar filtros
+                      </button>
+                    )}
+                  </div>
+                  {filters.overdue && (
+                    <p className="field-hint overdue mb-3">
+                      Exibindo somente chamados com prazo excedido.
+                    </p>
+                  )}
+                  <section
+                    className="tickets-surface"
+                    data-testid="admin-tickets-table"
+                  >
+                    <div className="table-caption">
+                      <h2>
+                        {tab === "overview"
+                          ? "Últimos chamados"
+                          : "Central de chamados"}
+                      </h2>
+                      <span aria-live="polite">
+                        {total} {total === 1 ? "solicitação" : "solicitações"}
+                      </span>
+                    </div>
+                    {error ? (
+                      <EmptyState
+                        title="Falha ao carregar"
+                        onRetry={loadTickets}
+                      >
+                        {error}
+                      </EmptyState>
+                    ) : loading ? (
+                      <div className="empty-state" role="status">
+                        <Loader2
+                          size={25}
+                          className="animate-spin mx-auto text-purple-400"
+                        />
+                        <p>Atualizando chamados…</p>
+                      </div>
+                    ) : tickets.length === 0 ? (
+                      <EmptyState
+                        title={
+                          hasFilters
+                            ? "Nenhum chamado com esses filtros"
+                            : "Tudo pronto para começar"
+                        }
+                        icon={Inbox}
+                      >
+                        {hasFilters
+                          ? "Ajuste sua busca ou limpe os filtros para ver outras solicitações."
+                          : "Os chamados abertos pelo portal aparecerão aqui."}
+                      </EmptyState>
+                    ) : (
+                      <>
+                        <div className="desktop-ticket-table overflow-x-auto">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Protocolo</th>
+                                <th>Categoria</th>
+                                <th>Solicitante</th>
+                                <th>Prazo estimado</th>
+                                <th>Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {tickets.map((t) => (
+                                <tr
+                                  key={t.id}
+                                  data-testid={`ticket-row-${t.ticket_number}`}
+                                >
+                                  <td>
+                                    <button
+                                      className="ticket-open"
+                                      onClick={() => openTicket(t)}
+                                    >
+                                      {t.file && (
+                                        <Paperclip
+                                          size={11}
+                                          className="inline mr-1"
+                                        />
+                                      )}
+                                      {t.ticket_number}
+                                    </button>
+                                  </td>
+                                  <td>
+                                    <span className="ticket-category">
+                                      <CategoryIcon name={t.category_icon} />
+                                      {t.category_name}
+                                    </span>
+                                  </td>
+                                  <td className="ticket-requester">
+                                    {t.requester?.email}
+                                    <small>{t.requester?.empresa}</small>
+                                  </td>
+                                  <td>
+                                    <span
+                                      className={`ticket-due ${isOverdue(t) ? "overdue" : ""}`}
+                                    >
+                                      {fmt(t.due_at)}
+                                      {isOverdue(t) && (
+                                        <small className="block mt-1">
+                                          Prazo excedido
+                                        </small>
+                                      )}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <span
+                                      className={`status-badge ${STATUS_STYLES[t.status]}`}
+                                    >
+                                      {STATUS_LABELS[t.status]}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="mobile-ticket-list">
+                          {tickets.map((t) => (
+                            <button
+                              key={t.id}
+                              className="mobile-ticket"
+                              onClick={() => openTicket(t)}
+                              data-testid={`mobile-ticket-${t.ticket_number}`}
+                            >
+                              <span className="mobile-ticket-top">
+                                <span className="mobile-ticket-number">
+                                  {t.ticket_number}
+                                </span>
+                                <span
+                                  className={`status-badge ${STATUS_STYLES[t.status]}`}
+                                >
+                                  {STATUS_LABELS[t.status]}
+                                </span>
+                              </span>
+                              <span className="ticket-category">
+                                <CategoryIcon name={t.category_icon} />
+                                {t.category_name}
+                                <ArrowUpRight size={14} className="ml-auto" />
+                              </span>
+                              <span
+                                className={`ticket-due block ${isOverdue(t) ? "overdue" : ""}`}
+                              >
+                                Previsão: {fmt(t.due_at)}{" "}
+                                {isOverdue(t) && "· Prazo excedido"}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                    <div className="pagination">
+                      <span>
+                        Página {page} de {totalPages}
+                      </span>
+                      <div>
+                        <button
+                          className="icon-button"
+                          disabled={page <= 1 || loading}
+                          onClick={() => setPage((p) => p - 1)}
+                          aria-label="Página anterior"
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                        <button
+                          className="icon-button"
+                          disabled={page >= totalPages || loading}
+                          onClick={() => setPage((p) => p + 1)}
+                          aria-label="Próxima página"
+                        >
+                          <ChevronRight size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+                </>
+              )}
+              {tab === "categories" && (
+                <CategoryManager categories={categories} onChange={loadAux} />
+              )}
+              {tab === "users" && <UserManager />}
+              {tab === "audit" && <AuditManager />}
+            </motion.div>
+          </AnimatePresence>
+        </main>
+      </div>
+      <Sheet
+        open={!!selected}
+        onOpenChange={(o) => {
+          if (!o && !saving) closeDetail();
+        }}
+      >
+        <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
           {selected && (
             <>
-              <SheetHeader className="pb-4 border-b border-purple-100">
-                <SheetTitle className="font-mono text-purple-700">{selected.ticket_number}</SheetTitle>
+              <SheetHeader>
+                <SheetTitle className="font-mono text-purple-300">
+                  {selected.ticket_number}
+                </SheetTitle>
+                <SheetDescription>
+                  {selected.category_name} · Aberto em{" "}
+                  {fmt(selected.created_at)}
+                </SheetDescription>
               </SheetHeader>
-              <div className="mt-5 space-y-6" data-testid="ticket-detail-drawer">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${STATUS_STYLES[selected.status]}`}>{selected.status_label}</span>
-                  <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
-                    <CategoryIcon name={selected.category_icon} className="w-4 h-4 text-purple-500" />
-                    {selected.category_name}
-                  </span>
-                  <span className="text-xs text-slate-400 ml-auto">{fmt(selected.created_at)}</span>
-                </div>
-
+              <div
+                className="mt-6 drawer-content"
+                data-testid="ticket-detail-drawer"
+              >
+                {detailLoading ? (
+                  <p className="field-hint mb-5">
+                    <Loader2 size={14} className="inline animate-spin mr-2" />
+                    Atualizando detalhes…
+                  </p>
+                ) : detailError ? (
+                  <div className="error-banner mb-5">
+                    <AlertCircle size={14} />
+                    {detailError}
+                    <button
+                      className="underline"
+                      onClick={() => openTicket(selected)}
+                    >
+                      Tentar novamente
+                    </button>
+                  </div>
+                ) : null}
                 <section>
-                  <p className="text-xs font-bold uppercase tracking-wider text-purple-600 mb-2">Alterar status</p>
-                  <Select value={selected.status} onValueChange={(v) => changeStatus(selected.id, v)}>
-                    <SelectTrigger data-testid="change-status-select"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(STATUS_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </section>
-
-                <section className="rounded-2xl p-4 bg-slate-50 border border-slate-100 space-y-2">
-                  <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Solicitante</p>
-                  <p className="text-sm text-slate-700">Matrícula: <strong>{selected.requester?.matricula}</strong></p>
-                  <p className="text-sm text-slate-700 break-all">E-mail: <strong>{selected.requester?.email}</strong></p>
-                  <p className="text-sm text-slate-700">Empresa: <strong>{selected.requester?.empresa}</strong></p>
-                </section>
-
-                <section>
-                  <p className="text-xs font-bold uppercase tracking-wider text-purple-600 mb-2">Detalhes</p>
-                  <div className="grid gap-2">
-                    {Object.entries(selected.field_values || {}).map(([k, v]) => (
-                      <div key={k} className="rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-3 text-sm">
-                        <span className="block text-[11px] uppercase tracking-wide text-slate-400 mb-0.5">{k}</span>
-                        <span className="text-slate-800 font-medium break-words">{typeof v === "boolean" ? (v ? "Sim" : "Não") : String(v || "—")}</span>
-                      </div>
-                    ))}
+                  <div className="flex gap-2 mb-5">
+                    <span
+                      className={`status-badge ${STATUS_STYLES[selected.status]}`}
+                    >
+                      {STATUS_LABELS[selected.status]}
+                    </span>
+                    {isOverdue(selected) && (
+                      <span className="status-badge status-open">
+                        Prazo excedido
+                      </span>
+                    )}
+                  </div>
+                  <h3>Atualizar atendimento</h3>
+                  <div className="status-editor">
+                    <label className="field-hint" htmlFor="status-change">
+                      Novo status
+                    </label>
+                    <select
+                      id="status-change"
+                      data-testid="change-status-select"
+                      value={newStatus}
+                      onChange={(e) => setNewStatus(e.target.value)}
+                      disabled={saving || detailLoading || !!detailError}
+                    >
+                      {Object.entries(STATUS_LABELS).map(([k, v]) => (
+                        <option key={k} value={k}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                    <label className="field-hint" htmlFor="status-note">
+                      Observação interna · opcional
+                    </label>
+                    <textarea
+                      id="status-note"
+                      rows={3}
+                      maxLength={2000}
+                      value={note}
+                      onChange={(e) => setNote(e.target.value)}
+                      placeholder="Registre o que foi feito ou o próximo passo."
+                      disabled={saving}
+                    />
+                    <button
+                      className="button button-primary"
+                      data-testid="save-ticket-status"
+                      disabled={
+                        saving ||
+                        detailLoading ||
+                        !!detailError ||
+                        (newStatus === selected.status && !note.trim())
+                      }
+                      onClick={changeStatus}
+                    >
+                      {saving ? (
+                        <Loader2 className="animate-spin" size={15} />
+                      ) : (
+                        <Check size={15} />
+                      )}{" "}
+                      Salvar atualização
+                    </button>
                   </div>
                 </section>
-
-                {selected.file && (
-                  <section>
-                    <p className="text-xs font-bold uppercase tracking-wider text-purple-600 mb-2">Anexo</p>
-                    <button
-                      data-testid="download-file-button"
-                      onClick={() => downloadFile(selected)}
-                      className="interactive-press flex items-center gap-2 w-full bg-purple-50 border border-purple-100 rounded-xl px-4 py-3 text-sm text-purple-700 hover:bg-purple-100 transition-colors"
-                    >
-                      <Download className="w-4 h-4" />
-                      <span className="truncate flex-1 text-left">{selected.file.original_filename}</span>
-                    </button>
-                  </section>
-                )}
-
                 <section>
-                  <p className="text-xs font-bold uppercase tracking-wider text-purple-600 mb-2">Notificações por e-mail</p>
-                  {(selected.email_log || []).length === 0 ? (
-                    <p className="text-sm text-slate-400">Nenhuma notificação registrada ainda.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {selected.email_log.map((e, i) => (
-                        <div key={i} className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-sm text-slate-600">
-                          <Mail className={`w-4 h-4 shrink-0 ${e.sent ? "text-emerald-500" : "text-rose-400"}`} />
-                          <span className="truncate flex-1">{e.to}</span>
-                          <span className={`text-xs font-semibold ${e.sent ? "text-emerald-600" : "text-rose-500"}`}>{e.sent ? "enviado" : "falhou"}</span>
-                        </div>
-                      ))}
+                  <h3>Solicitante</h3>
+                  <dl>
+                    <dt>Matrícula</dt>
+                    <dd>{selected.requester?.matricula}</dd>
+                    <dt>E-mail</dt>
+                    <dd>{selected.requester?.email}</dd>
+                    <dt>Empresa</dt>
+                    <dd>{selected.requester?.empresa}</dd>
+                    <dt>Previsão</dt>
+                    <dd>{fmt(selected.due_at)}</dd>
+                  </dl>
+                </section>
+                <section className="field-values">
+                  <h3>Detalhes da solicitação</h3>
+                  {Object.entries(selected.field_values || {}).map(([k, v]) => (
+                    <div key={k}>
+                      <p>{k}</p>
+                      <span>
+                        {typeof v === "boolean"
+                          ? v
+                            ? "Sim"
+                            : "Não"
+                          : String(v ?? "—")}
+                      </span>
                     </div>
+                  ))}
+                  {selected.file && (
+                    <button
+                      className="button button-secondary w-full mt-4"
+                      data-testid="download-file-button"
+                      onClick={downloadFile}
+                    >
+                      <Download size={16} />
+                      <span className="truncate">
+                        {selected.file.original_filename}
+                      </span>
+                    </button>
                   )}
                 </section>
-
                 <section>
-                  <p className="text-xs font-bold uppercase tracking-wider text-purple-600 mb-3">Histórico</p>
-                  <div className="relative pl-4 border-l border-purple-100 space-y-4">
-                    {(selected.history || []).map((h, i) => (
-                      <div key={i} className="relative">
-                        <span className="absolute -left-[21px] top-1.5 w-2.5 h-2.5 rounded-full bg-purple-500 ring-4 ring-purple-50" />
-                        <p className="text-sm font-medium text-slate-700">{STATUS_LABELS[h.status]}</p>
-                        <p className="text-xs text-slate-400 mt-0.5">{fmt(h.at)}{h.by ? ` · por ${h.by}` : ""}</p>
+                  <h3>Histórico de atendimento</h3>
+                  {[...(selected.history || [])].reverse().map((h, i) => (
+                    <div className="history-entry" key={i}>
+                      <p>{STATUS_LABELS[h.status]}</p>
+                      <small>
+                        {fmt(h.at)}
+                        {h.by && ` · ${h.by}`}
+                      </small>
+                      {h.note && <p className="history-note">{h.note}</p>}
+                    </div>
+                  ))}
+                </section>
+                <section>
+                  <h3>Notificações por e-mail</h3>
+                  {(selected.email_log || []).length ? (
+                    selected.email_log.map((e, i) => (
+                      <div
+                        className="flex items-center gap-2 text-xs mb-3"
+                        key={i}
+                      >
+                        <Mail size={13} />
+                        <span className="truncate flex-1">{e.to}</span>
+                        <span
+                          className={
+                            e.sent ? "text-emerald-300" : "text-rose-300"
+                          }
+                        >
+                          {e.sent ? "Enviado" : "Não enviado"}
+                        </span>
                       </div>
-                    ))}
-                  </div>
+                    ))
+                  ) : (
+                    <p className="field-hint">
+                      Nenhum envio registrado para este chamado.
+                    </p>
+                  )}
                 </section>
               </div>
             </>

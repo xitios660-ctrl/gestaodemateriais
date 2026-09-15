@@ -1,7 +1,11 @@
 import axios from "axios";
 
-const configuredBackend = (process.env.REACT_APP_BACKEND_URL || "").trim().replace(/\/$/, "");
-const BACKEND_URL = configuredBackend || (typeof window !== "undefined" ? window.location.origin : "");
+const configuredBackend = (process.env.REACT_APP_BACKEND_URL || "")
+  .trim()
+  .replace(/\/$/, "");
+const BACKEND_URL =
+  configuredBackend ||
+  (typeof window !== "undefined" ? window.location.origin : "");
 export const API = `${BACKEND_URL}/api`;
 
 export const api = axios.create({
@@ -18,7 +22,9 @@ api.interceptors.response.use(
   async (error) => {
     const original = error.config;
     const status = error.response?.status;
-    const isAuthRoute = original?.url?.includes("/auth/login") || original?.url?.includes("/auth/refresh");
+    const isAuthRoute =
+      original?.url?.includes("/auth/login") ||
+      original?.url?.includes("/auth/refresh");
 
     if (status === 401 && original && !original._retried && !isAuthRoute) {
       original._retried = true;
@@ -29,7 +35,9 @@ api.interceptors.response.use(
         await refreshing;
         return api(original);
       } catch {
-        if (typeof window !== "undefined") {
+        // The provider owns initial session probes and ignores obsolete results.
+        // A slow anonymous probe must not expire a subsequent successful login.
+        if (typeof window !== "undefined" && !original._sessionProbe) {
           window.dispatchEvent(new Event("auth:expired"));
         }
       }
@@ -48,7 +56,9 @@ export function formatApiErrorDetail(detail) {
   }
   if (Array.isArray(detail)) {
     const messages = detail
-      .map((item) => (item && typeof item.msg === "string" ? item.msg.trim() : ""))
+      .map((item) =>
+        item && typeof item.msg === "string" ? item.msg.trim() : "",
+      )
       .filter(Boolean)
       .slice(0, 3);
     return messages.length ? messages.join(" ") : fallback;
@@ -61,7 +71,20 @@ export function formatApiErrorDetail(detail) {
 }
 
 export const ICON_OPTIONS = [
-  "Laptop", "KeyRound", "CalendarCheck", "Building2", "PackagePlus",
-  "Wrench", "Users", "FileText", "ShoppingCart", "Truck", "Headphones",
-  "Shield", "Database", "Mail", "Phone", "Settings",
+  "Laptop",
+  "KeyRound",
+  "CalendarCheck",
+  "Building2",
+  "PackagePlus",
+  "Wrench",
+  "Users",
+  "FileText",
+  "ShoppingCart",
+  "Truck",
+  "Headphones",
+  "Shield",
+  "Database",
+  "Mail",
+  "Phone",
+  "Settings",
 ];

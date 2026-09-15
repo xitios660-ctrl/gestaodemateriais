@@ -1,24 +1,72 @@
-import * as Icons from "lucide-react";
-
-export function CategoryIcon({ name, className }) {
-  const Cmp = Icons[name] || Icons.CircleHelp;
-  return <Cmp className={className} />;
-}
-
-export const STATUS_STYLES = {
-  aberto: "bg-amber-100 text-amber-700",
-  em_analise: "bg-purple-100 text-purple-700",
-  em_andamento: "bg-blue-100 text-blue-700",
-  concluido: "bg-emerald-100 text-emerald-700",
-  cancelado: "bg-rose-100 text-rose-700",
+import {
+  Laptop,
+  KeyRound,
+  CalendarCheck,
+  Building2,
+  PackagePlus,
+  Wrench,
+  Users,
+  FileText,
+  ShoppingCart,
+  Truck,
+  Headphones,
+  Shield,
+  Database,
+  Mail,
+  Phone,
+  Settings,
+  CircleHelp,
+} from "lucide-react";
+const icons = {
+  Laptop,
+  KeyRound,
+  CalendarCheck,
+  Building2,
+  PackagePlus,
+  Wrench,
+  Users,
+  FileText,
+  ShoppingCart,
+  Truck,
+  Headphones,
+  Shield,
+  Database,
+  Mail,
+  Phone,
+  Settings,
 };
-
+export function CategoryIcon({ name, className }) {
+  const Icon = icons[name] || CircleHelp;
+  return <Icon className={className} />;
+}
+export const STATUS_STYLES = {
+  aberto: "status-open",
+  em_analise: "status-review",
+  em_andamento: "status-progress",
+  concluido: "status-done",
+  cancelado: "status-cancelled",
+};
 export const STATUS_LABELS = {
   aberto: "Aberto",
-  em_analise: "Em Análise",
-  em_andamento: "Em Andamento",
+  em_analise: "Em análise",
+  em_andamento: "Em andamento",
   concluido: "Concluído",
   cancelado: "Cancelado",
 };
-
-export const STATUS_FLOW = ["aberto", "em_analise", "em_andamento", "concluido"];
+export const STATUS_FLOW = [
+  "aberto",
+  "em_analise",
+  "em_andamento",
+  "concluido",
+];
+export const fmt = (dt) =>
+  dt
+    ? new Date(dt).toLocaleString("pt-BR", {
+        dateStyle: "short",
+        timeStyle: "short",
+      })
+    : "—";
+export const isOverdue = (t) =>
+  !["concluido", "cancelado"].includes(t.status) &&
+  t.due_at &&
+  new Date(t.due_at) < new Date();

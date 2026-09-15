@@ -1,55 +1,89 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { motion, useMotionValueEvent, useReducedMotion, useScroll } from "framer-motion";
-import { Search } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Link, useLocation } from "react-router-dom";
+import { Search, Pause, Play } from "lucide-react";
+import { useExperience } from "@/components/Experience";
+import { motion, useScroll, useSpring, useReducedMotion } from "framer-motion";
 
-export function SiteHeader() {
-  const navigate = useNavigate();
-  const reduceMotion = useReducedMotion();
-  const { scrollY } = useScroll();
-  const [scrolled, setScrolled] = useState(false);
-
-  useMotionValueEvent(scrollY, "change", (value) => {
-    const next = value > 16;
-    setScrolled((current) => (current === next ? current : next));
-  });
-
+export function Brand() {
   return (
-    <motion.header
-      initial={false}
-      animate={{ boxShadow: scrolled ? "0 8px 30px rgba(67, 25, 93, 0.06)" : "0 0 0 rgba(0,0,0,0)" }}
-      transition={{ duration: reduceMotion ? 0 : 0.2 }}
-      className="sticky top-0 z-40 w-full bg-white/85 backdrop-blur-xl border-b border-purple-100/70"
-    >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <Link to="/admin/login" data-testid="brand-logo" title="Acesso restrito" aria-label="Abrir acesso administrativo" className="group rounded-xl shrink-0">
-            <motion.img
-              whileHover={reduceMotion ? undefined : { scale: 1.055, rotate: -1 }}
-              whileTap={reduceMotion ? undefined : { scale: 0.94 }}
-              src="/vivo-logo.jpeg"
-              alt="Vivo"
-              className="w-9 h-9 rounded-xl object-cover shadow-lg shadow-purple-500/20"
-            />
+    <>
+      <img src="/vivo-logo.jpeg" alt="Vivo" width="40" height="40" />
+      <span>
+        Gestão de Materiais<small>CENTRAL DE SERVIÇOS</small>
+      </span>
+    </>
+  );
+}
+export function SiteHeader() {
+  const {
+    animationsEnabled,
+    toggleAnimations,
+    reduced: systemReduced,
+  } = useExperience();
+  const { pathname } = useLocation();
+  const { scrollYProgress } = useScroll();
+  const progress = useSpring(scrollYProgress, { stiffness: 160, damping: 30 });
+  const reduced = useReducedMotion();
+  return (
+    <header className="site-header">
+      <a className="skip-link" href="#main-content">
+        Pular para o conteúdo
+      </a>
+      <div className="shell header-inner">
+        <div className="brand">
+          <Link
+            to="/admin/login"
+            data-testid="brand-logo"
+            aria-label="Abrir acesso administrativo"
+            title="Acesso restrito"
+          >
+            <img src="/vivo-logo.jpeg" alt="Vivo" width="40" height="40" />
           </Link>
-          <Link to="/" title="Início" className="leading-tight min-w-0 rounded-lg">
-            <p className="font-display font-extrabold text-slate-950 text-sm sm:text-base truncate">Gestão de Materiais</p>
-            <p className="text-[11px] text-slate-400 -mt-0.5 truncate">Portal de Chamados</p>
+          <Link to="/" aria-label="Gestão de Materiais — início">
+            Gestão de Materiais<small>CENTRAL DE SERVIÇOS</small>
           </Link>
         </div>
-
-        <Button
-          variant="ghost"
-          data-testid="nav-track-button"
-          aria-label="Consultar chamado"
-          onClick={() => navigate("/acompanhar")}
-          className="text-slate-600 hover:text-purple-700 hover:bg-purple-50 gap-2 rounded-xl shrink-0"
-        >
-          <Search className="w-4 h-4" />
-          <span className="hidden sm:inline">Consultar chamado</span>
-        </Button>
+        <nav className="desktop-nav" aria-label="Navegação principal">
+          <Link to="/#servicos" className={pathname === "/" ? "active" : ""}>
+            Serviços
+          </Link>
+          <Link
+            to="/acompanhar"
+            className={pathname === "/acompanhar" ? "active" : ""}
+            data-testid="nav-track-button"
+          >
+            Acompanhar chamado
+          </Link>
+          <Link to="/#como-funciona">Como funciona</Link>
+        </nav>
+        <div className="header-actions">
+          {!systemReduced && (
+            <button
+              className="icon-button motion-toggle"
+              type="button"
+              onClick={toggleAnimations}
+              aria-label={
+                animationsEnabled ? "Pausar animações" : "Ativar animações"
+              }
+              title={
+                animationsEnabled ? "Pausar animações" : "Ativar animações"
+              }
+            >
+              {animationsEnabled ? <Pause size={13} /> : <Play size={13} />}
+            </button>
+          )}
+          <Link
+            to="/acompanhar"
+            className="mobile-track icon-button"
+            aria-label="Consultar chamado"
+          >
+            <Search size={18} />
+          </Link>
+        </div>
       </div>
-    </motion.header>
+      <motion.div
+        className="scroll-progress"
+        style={{ scaleX: reduced ? scrollYProgress : progress }}
+      />
+    </header>
   );
 }
