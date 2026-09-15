@@ -262,6 +262,18 @@ def scope_match(user: dict) -> dict:
     return {"category_id": {"$in": user.get("categories", []) or []}}
 
 
+async def get_all_admin_notification_emails() -> List[str]:
+    admins = await db.users.find(
+        {"role": "admin"},
+        {"email": 1},
+    ).to_list(500)
+    return unique_recipient_emails([
+        str(admin.get("email") or "").strip().lower()
+        for admin in admins
+        if admin.get("email")
+    ])
+
+
 async def get_ticket_notification_admin_email() -> str:
     """Return the admin account that most recently logged in to manage the panel."""
     target = await db.system_settings.find_one({"_id": "ticket_notification_admin"})
@@ -642,7 +654,7 @@ async def send_ticket_opened_email(ticket: dict) -> bool:
     return bool(email_id)
 
 
-async def send_status_update_email(ticket: dict, previous_status: str, new_status: str, note: Optional[str] = None) -> bool:
+async def send_status_update_email(ticket: dict, previous_status: str, new_status: str, note: Optional[str] = None, responder: Optional[dict] = None) -> bool:
     requester = ticket.get("requester") or {}
     to_email = str(requester.get("email") or "").strip().lower()
     if not to_email:
@@ -664,6 +676,20 @@ async def send_status_update_email(ticket: dict, previous_status: str, new_statu
         f'<p style="color:#475569"><strong>Observação:</strong> {safe_note}</p>'
         if safe_note else ""
     )
+    responder_data = responder or ticket.get("assigned_to") or {}
+    responder_name = escape(str(responder_data.get("name") or responder_data.get("email") or "Equipe de atendimento"))
+    responder_email = escape(str(responder_data.get("email") or "").strip().lower())
+    responder_email_html = (
+        f'<div style="color:#64748b;font-size:13px;margin-top:2px">{responder_email}</div>'
+        if responder_email else ""
+    )
+    responder_html = (
+        f'<div style="margin:18px 0;padding:14px 16px;border-radius:10px;background:#f8f5fb">'
+        f'<div style="font-size:12px;color:#7c3aed;text-transform:uppercase;font-weight:700">Quem está atendendo</div>'
+        f'<div style="margin-top:5px;color:#1f2937;font-weight:700">{responder_name}</div>'
+        f'{responder_email_html}'
+        f'</div>'
+    )
 
     html = (
         f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif;max-width:560px">'
@@ -673,6 +699,7 @@ async def send_status_update_email(ticket: dict, previous_status: str, new_statu
         f'<tr><td style="padding:4px 12px 4px 0;color:#64748b">Status anterior</td><td><strong>{old_label}</strong></td></tr>'
         f'<tr><td style="padding:4px 12px 4px 0;color:#64748b">Novo status</td><td><strong>{new_label}</strong></td></tr>'
         f'</table>'
+        f'{responder_html}'
         f'{note_html}'
         f'<p><a href="{escape(track_link)}" style="background:#660099;color:#fff;padding:10px 20px;'
         f'border-radius:8px;text-decoration:none;display:inline-block">Acompanhar chamado</a></p>'
@@ -1356,8 +1383,7 @@ async def create_ticket(
     res = await db.tickets.insert_one(ticket)
     ticket["_id"] = res.inserted_id
 
-    notification_admin_email = await get_ticket_notification_admin_email()
-    owners = unique_recipient_emails([notification_admin_email])
+    owners = await get_all_admin_notification_emails()
     if owners:
         background_tasks.add_task(notify_owners, dict(ticket), owners)
     background_tasks.add_task(send_ticket_opened_email, dict(ticket))
@@ -1573,11 +1599,26 @@ async def update_status(
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
     now = datetime.now(timezone.utc).isoformat()
     actor = user.get("name") or user.get("email")
-    entry = {"status": payload.status, "at": now, "note": payload.note or "", "by": actor}
+    responder = {
+        "id": str(user.get("_id") or ""),
+        "name": str(user.get("name") or user.get("email") or "Equipe de atendimento"),
+        "email": str(user.get("email") or "").strip().lower(),
+    }
+    entry = {
+        "status": payload.status,
+        "at": now,
+        "note": payload.note or "",
+        "by": actor,
+        "by_email": responder["email"],
+    }
     previous_status = doc.get("status")
+    set_fields = {"status": payload.status}
+    if payload.status in {"em_analise", "em_andamento"}:
+        set_fields["assigned_to"] = responder
+        set_fields["assigned_at"] = now
     await db.tickets.update_one(
         {"_id": oid},
-        {"$set": {"status": payload.status}, "$push": {"history": entry}})
+        {"$set": set_fields, "$push": {"history": entry}})
     doc = await db.tickets.find_one({"_id": oid})
     await write_audit(user, "ticket.status", "ticket", ticket_id, {
         "ticket_number": doc.get("ticket_number", ""),
@@ -1590,6 +1631,7 @@ async def update_status(
         previous_status,
         payload.status,
         payload.note,
+        responder if payload.status in {"em_analise", "em_andamento"} else (doc.get("assigned_to") or responder),
     )
     return ser_ticket(doc)
 
