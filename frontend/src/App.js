@@ -69,8 +69,8 @@ function AnimatedRoutes() {
 function App() {
   return (
     <div className="App">
-      <AuthProvider>
-        <BrowserRouter>
+      <BrowserRouter>
+        <AuthProvider>
           <Toaster position="top-right" richColors closeButton toastOptions={{ duration: 3500 }} />
           <ConnectionStatus />
           <AppErrorBoundary>
@@ -78,8 +78,8 @@ function App() {
               <AnimatedRoutes />
             </Suspense>
           </AppErrorBoundary>
-        </BrowserRouter>
-      </AuthProvider>
+        </AuthProvider>
+      </BrowserRouter>
     </div>
   );
 }
