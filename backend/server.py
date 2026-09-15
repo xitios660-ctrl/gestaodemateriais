@@ -75,7 +75,9 @@ SMTP_USERNAME = (os.environ.get("SMTP_USERNAME") or "").strip()
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD") or ""
 SMTP_FROM_EMAIL = (os.environ.get("SMTP_FROM_EMAIL") or SMTP_USERNAME).strip()
 SMTP_STARTTLS = (os.environ.get("SMTP_STARTTLS") or "true").strip().lower() in ("1", "true", "yes")
-EMAIL_SMOKE_TEST_TO = (os.environ.get("EMAIL_SMOKE_TEST_TO") or "").strip().lower()
+BREVO_API_KEY = (os.environ.get("BREVO_API_KEY") or "").strip()
+BREVO_SENDER_EMAIL = (os.environ.get("BREVO_SENDER_EMAIL") or "").strip().lower()
+BREVO_SENDER_NAME = (os.environ.get("BREVO_SENDER_NAME") or EMAIL_FROM_NAME).strip()
 DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
 PRIMARY_NOTIFICATION_EMAIL = (os.environ.get("PRIMARY_NOTIFICATION_EMAIL") or DEFAULT_OWNER_EMAIL).strip().lower()
 DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
@@ -436,9 +438,10 @@ def _assert_safe_email(subject: str, html: str) -> None:
 
 
 def email_delivery_configured() -> bool:
+    brevo_ready = bool(BREVO_API_KEY and BREVO_SENDER_EMAIL)
     emergent_ready = bool(EMAIL_KEY and not EMAIL_KEY.startswith("{"))
     smtp_ready = bool(SMTP_HOST and SMTP_FROM_EMAIL and SMTP_USERNAME and SMTP_PASSWORD)
-    return emergent_ready or smtp_ready
+    return brevo_ready or emergent_ready or smtp_ready
 
 
 def _smtp_send(to: str, subject: str, html: str) -> str:
@@ -467,6 +470,30 @@ def _smtp_send(to: str, subject: str, html: str) -> str:
 
 async def send_email(to: str, subject: str, html: str) -> Optional[str]:
     _assert_safe_email(subject, html)
+
+    if BREVO_API_KEY and BREVO_SENDER_EMAIL:
+        try:
+            payload = {
+                "sender": {"email": BREVO_SENDER_EMAIL, "name": BREVO_SENDER_NAME},
+                "to": [{"email": to}],
+                "subject": subject,
+                "htmlContent": html,
+            }
+            async with httpx.AsyncClient(timeout=30) as client_http:
+                resp = await client_http.post(
+                    "https://api.brevo.com/v3/smtp/email",
+                    headers={
+                        "api-key": BREVO_API_KEY,
+                        "accept": "application/json",
+                        "content-type": "application/json",
+                    },
+                    json=payload,
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("messageId") or data.get("messageIds", [None])[0]
+        except Exception as exc:
+            logger.error("Brevo send error to %s: %s: %s", to, type(exc).__name__, str(exc)[:240])
 
     if EMAIL_KEY and not EMAIL_KEY.startswith("{"):
         payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
@@ -1717,13 +1744,6 @@ async def startup():
     await seed_admin()
     await seed_categories()
     logger.info("Email delivery configured: %s", "yes" if email_delivery_configured() else "no")
-    if EMAIL_SMOKE_TEST_TO:
-        test_id = await send_email(
-            EMAIL_SMOKE_TEST_TO,
-            "Teste de e-mail - Gestão de Materiais",
-            "<p>Teste automático de envio do sistema Gestão de Materiais.</p>",
-        )
-        logger.info("Email smoke test: %s", "sent" if test_id else "failed")
     try:
         await init_storage()
         logger.info("Storage inicializado (%s)", "Emergent" if EMERGENT_KEY else f"local: {LOCAL_STORAGE_DIR}")
