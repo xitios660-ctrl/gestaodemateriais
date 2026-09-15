@@ -73,7 +73,13 @@ export default function TicketForm() {
       .then(({ data }) => {
         setCategory(data);
         const init = {};
-        (data.fields || []).forEach((f) => { init[f.id] = f.type === "checkbox" ? false : ""; });
+        (data.fields || []).forEach((f) => {
+          init[f.id] = f.type === "checkbox"
+            ? false
+            : f.type === "dependent_select"
+              ? { parent: "", child: "" }
+              : "";
+        });
         setValues(init);
       })
       .catch(() => setLoadFailed(true))
@@ -89,6 +95,25 @@ export default function TicketForm() {
 
   const setValue = (id, value) => {
     setValues((current) => ({ ...current, [id]: value }));
+    setErrors((current) => ({ ...current, [`field.${id}`]: "" }));
+  };
+
+  const setDependentParent = (id, parent) => {
+    setValues((current) => ({
+      ...current,
+      [id]: { parent, child: "" },
+    }));
+    setErrors((current) => ({ ...current, [`field.${id}`]: "" }));
+  };
+
+  const setDependentChild = (id, child) => {
+    setValues((current) => ({
+      ...current,
+      [id]: {
+        parent: current[id]?.parent || "",
+        child,
+      },
+    }));
     setErrors((current) => ({ ...current, [`field.${id}`]: "" }));
   };
 
@@ -122,8 +147,17 @@ export default function TicketForm() {
     else if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(requester.email.trim())) next["requester.email"] = "Digite um e-mail válido";
 
     for (const field of category?.fields || []) {
-      if (!field.required) continue;
       const val = values[field.id];
+
+      if (field.type === "dependent_select") {
+        const pair = val && typeof val === "object" ? val : {};
+        if (field.required && (!pair.parent || !pair.child)) {
+          next[`field.${field.id}`] = "Selecione a categoria e a subcategoria";
+        }
+        continue;
+      }
+
+      if (!field.required) continue;
       const missing = field.type === "checkbox" ? val !== true : !String(val || "").trim();
       if (missing) next[`field.${field.id}`] = "Este campo é obrigatório";
     }
@@ -399,6 +433,73 @@ export default function TicketForm() {
                           <SelectContent>{(f.options || []).map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
                         </Select>
                       )}
+                      {f.type === "dependent_select" && (() => {
+                        const pair = values[f.id] && typeof values[f.id] === "object"
+                          ? values[f.id]
+                          : { parent: "", child: "" };
+                        const parentOptions = f.dependent_options || [];
+                        const selectedParent = parentOptions.find((item) => item.parent === pair.parent);
+                        const childOptions = selectedParent?.children || [];
+
+                        return (
+                          <div
+                            data-testid={`field-${f.id}`}
+                            aria-invalid={!!fieldError}
+                            className={`mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-xl ${fieldError ? "ring-1 ring-rose-300 p-2" : ""}`}
+                          >
+                            <div>
+                              <Label className="text-xs text-slate-500">
+                                {f.parent_label || "Categoria"} {f.required && <span className="text-rose-500">*</span>}
+                              </Label>
+                              <Select
+                                value={pair.parent || ""}
+                                onValueChange={(value) => setDependentParent(f.id, value)}
+                              >
+                                <SelectTrigger
+                                  data-testid={`field-${f.id}-parent`}
+                                  className="mt-1.5 bg-white border-purple-100"
+                                >
+                                  <SelectValue placeholder={`Selecione ${(f.parent_label || "categoria").toLowerCase()}...`} />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {parentOptions.map((item) => (
+                                    <SelectItem key={item.parent} value={item.parent}>{item.parent}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div>
+                              <Label className="text-xs text-slate-500">
+                                {f.child_label || "Subcategoria"} {f.required && <span className="text-rose-500">*</span>}
+                              </Label>
+                              <Select
+                                value={pair.child || ""}
+                                onValueChange={(value) => setDependentChild(f.id, value)}
+                                disabled={!pair.parent}
+                              >
+                                <SelectTrigger
+                                  data-testid={`field-${f.id}-child`}
+                                  className="mt-1.5 bg-white border-purple-100 disabled:opacity-60"
+                                >
+                                  <SelectValue
+                                    placeholder={
+                                      pair.parent
+                                        ? `Selecione ${(f.child_label || "subcategoria").toLowerCase()}...`
+                                        : `Escolha ${(f.parent_label || "categoria").toLowerCase()} primeiro`
+                                    }
+                                  />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {childOptions.map((item) => (
+                                    <SelectItem key={item} value={item}>{item}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+                        );
+                      })()}
                       {f.type === "checkbox" && (
                         <label className={`flex items-start gap-2.5 cursor-pointer rounded-xl p-3 border ${fieldError ? "border-rose-200 bg-rose-50" : "border-transparent hover:bg-purple-50"} transition-colors`}>
                           <Checkbox data-testid={`field-${f.id}`} checked={!!values[f.id]} onCheckedChange={(v) => setValue(f.id, !!v)} />
