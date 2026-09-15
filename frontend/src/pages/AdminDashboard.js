@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useDeferredValue } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { api, formatApiErrorDetail } from "@/lib/api";
@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import {
   LogOut, LayoutGrid, Ticket, Search, Clock, CheckCircle2, Inbox,
   TrendingUp, Download, Mail, Paperclip, Users, SlidersHorizontal,
-  ChevronRight, RefreshCw, X, Sparkles
+  ChevronRight, ChevronLeft, RefreshCw, X, Sparkles
 } from "lucide-react";
 
 function fmt(dt) {
@@ -144,19 +144,42 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filters, setFilters] = useState({ status: "all", category_id: "all", search: "" });
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ total: 0, page: 1, pages: 1, limit: 50 });
   const [selected, setSelected] = useState(null);
+  const deferredSearch = useDeferredValue(filters.search);
+
+  const ticketParams = useMemo(() => ({
+    status: filters.status,
+    category_id: filters.category_id,
+    search: deferredSearch,
+    page,
+    limit: 50,
+    paginated: true,
+  }), [filters.status, filters.category_id, deferredSearch, page]);
 
   const loadTickets = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const { data } = await api.get("/tickets", { params: filters });
-      setTickets(data);
+      const { data } = await api.get("/tickets", { params: ticketParams });
+      if (Array.isArray(data)) {
+        setTickets(data);
+        setPagination({ total: data.length, page: 1, pages: 1, limit: data.length || 50 });
+      } else {
+        setTickets(data.items || []);
+        setPagination({
+          total: data.total || 0,
+          page: data.page || 1,
+          pages: data.pages || 1,
+          limit: data.limit || 50,
+        });
+      }
     } catch (err) {
       toast.error(formatApiErrorDetail(err.response?.data?.detail) || "Não foi possível carregar os chamados");
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [filters]);
+  }, [ticketParams]);
 
   const loadAux = useCallback(async () => {
     try {
@@ -179,7 +202,15 @@ export default function AdminDashboard() {
     [filters]
   );
 
-  const clearFilters = () => setFilters({ status: "all", category_id: "all", search: "" });
+  const updateFilter = (patch) => {
+    setPage(1);
+    setFilters((current) => ({ ...current, ...patch }));
+  };
+
+  const clearFilters = () => {
+    setPage(1);
+    setFilters({ status: "all", category_id: "all", search: "" });
+  };
 
   const refreshAll = async () => {
     setRefreshing(true);
@@ -328,19 +359,19 @@ export default function AdminDashboard() {
                     <Input
                       data-testid="ticket-search-input"
                       value={filters.search}
-                      onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                      onChange={(e) => updateFilter({ search: e.target.value })}
                       placeholder="Número, e-mail, matrícula ou empresa"
                       className="pl-9 bg-white border-purple-100 h-10"
                     />
                   </div>
-                  <Select value={filters.status} onValueChange={(v) => setFilters({ ...filters, status: v })}>
+                  <Select value={filters.status} onValueChange={(v) => updateFilter({ status: v })}>
                     <SelectTrigger data-testid="filter-status" className="w-full md:w-44 bg-white border-purple-100 h-10"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Todos os status</SelectItem>
                       {Object.entries(STATUS_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
                     </SelectContent>
                   </Select>
-                  <Select value={filters.category_id} onValueChange={(v) => setFilters({ ...filters, category_id: v })}>
+                  <Select value={filters.category_id} onValueChange={(v) => updateFilter({ category_id: v })}>
                     <SelectTrigger data-testid="filter-category" className="w-full md:w-48 bg-white border-purple-100 h-10"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Todas categorias</SelectItem>
@@ -422,6 +453,36 @@ export default function AdminDashboard() {
                       </tbody>
                     </table>
                   </div>
+
+                  {pagination.pages > 1 && (
+                    <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1">
+                      <p className="text-xs text-slate-400">
+                        {pagination.total} chamado{pagination.total === 1 ? "" : "s"} · página {pagination.page} de {pagination.pages}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPage((current) => Math.max(1, current - 1))}
+                          disabled={pagination.page <= 1 || loading}
+                          className="border-purple-100 text-slate-600 hover:text-purple-700 hover:bg-purple-50 gap-1.5"
+                        >
+                          <ChevronLeft className="w-4 h-4" /> Anterior
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPage((current) => Math.min(pagination.pages, current + 1))}
+                          disabled={pagination.page >= pagination.pages || loading}
+                          className="border-purple-100 text-slate-600 hover:text-purple-700 hover:bg-purple-50 gap-1.5"
+                        >
+                          Próxima <ChevronRight className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </motion.section>
