@@ -694,6 +694,7 @@ async def create_user(payload: UserCreate, background_tasks: BackgroundTasks, us
             "user_id": str(res.inserted_id), "email": email,
             "expires_at": (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat(),
             "used": False, "created_at": datetime.now(timezone.utc).isoformat(),
+            "purge_at": datetime.now(timezone.utc) + timedelta(hours=72),
         })
         background_tasks.add_task(send_welcome_email, email, doc["name"], token)
     return ser_user(doc)
@@ -775,10 +776,15 @@ GENERIC_RESET_MSG = {"message": "Se este e-mail estiver cadastrado, enviaremos u
 
 
 @api_router.post("/auth/forgot-password")
-async def forgot_password(payload: ForgotInput, background_tasks: BackgroundTasks):
+async def forgot_password(payload: ForgotInput, request: Request, background_tasks: BackgroundTasks):
+    await enforce_rate_limit(request, "forgot-password", limit=5, minutes=15)
     email = payload.email.lower().strip()
     now = datetime.now(timezone.utc)
-    await db.password_reset_requests.insert_one({"email": email, "created_at": now.isoformat()})
+    await db.password_reset_requests.insert_one({
+        "email": email,
+        "created_at": now.isoformat(),
+        "expires_at": now + timedelta(hours=24),
+    })
     window = (now - timedelta(minutes=15)).isoformat()
     recent = await db.password_reset_requests.count_documents(
         {"email": email, "created_at": {"$gt": window}})
@@ -793,6 +799,7 @@ async def forgot_password(payload: ForgotInput, background_tasks: BackgroundTask
         "token_hash": token_hash, "user_id": str(user["_id"]), "email": email,
         "expires_at": (now + timedelta(hours=1)).isoformat(), "used": False,
         "created_at": now.isoformat(),
+        "purge_at": now + timedelta(hours=24),
     })
     background_tasks.add_task(send_password_reset_email, user["email"], token)
     return GENERIC_RESET_MSG
@@ -1393,7 +1400,9 @@ async def startup():
     await db.tickets.create_index("requester.matricula")
     await db.password_reset_tokens.create_index("token_hash", unique=True)
     await db.password_reset_tokens.create_index("email")
+    await db.password_reset_tokens.create_index("purge_at", expireAfterSeconds=0)
     await db.password_reset_requests.create_index("email")
+    await db.password_reset_requests.create_index("expires_at", expireAfterSeconds=0)
     await db.audit_logs.create_index([("created_at", -1)])
     await db.audit_logs.create_index([("actor_id", 1), ("created_at", -1)])
     await seed_admin()
