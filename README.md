@@ -1,5 +1,7 @@
 # Gestão de Materiais — Portal de Chamados
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fxitios660-ctrl%2Fgestaodemateriais)
+
 Portal interno para abertura e gestão de chamados (Vivo). Stack: **React** (frontend) + **FastAPI** (backend) + **MongoDB**.
 
 ## Estrutura
