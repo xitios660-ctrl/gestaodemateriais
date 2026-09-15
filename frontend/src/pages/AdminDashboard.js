@@ -81,6 +81,44 @@ function DashboardSkeleton() {
   );
 }
 
+function InsightBars({ title, subtitle, items, getLabel }) {
+  const max = Math.max(1, ...items.map((item) => Number(item.count) || 0));
+  return (
+    <motion.div variants={fadeUp} className="premium-card p-5">
+      <div className="mb-4">
+        <h2 className="font-display text-sm font-bold text-slate-900">{title}</h2>
+        <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-sm text-slate-400 py-5">Ainda não há dados suficientes.</p>
+      ) : (
+        <div className="space-y-3">
+          {items.slice(0, 5).map((item, index) => {
+            const value = Number(item.count) || 0;
+            const ratio = Math.max(0.04, value / max);
+            return (
+              <div key={item.name || item.status || index}>
+                <div className="flex items-center justify-between gap-3 text-xs mb-1.5">
+                  <span className="font-medium text-slate-600 truncate">{getLabel(item)}</span>
+                  <span className="font-bold text-slate-700 tabular-nums">{value}</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-purple-50 overflow-hidden">
+                  <motion.div
+                    initial={{ scaleX: 0 }}
+                    animate={{ scaleX: ratio }}
+                    transition={{ duration: 0.45, delay: index * 0.04, ease: [0.16, 1, 0.3, 1] }}
+                    className="h-full w-full origin-left rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-500"
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
 function TicketListSkeleton() {
   return (
     <div className="premium-surface rounded-2xl p-4 sm:p-5 space-y-3">
@@ -340,6 +378,23 @@ export default function AdminDashboard() {
                   <StatCard icon={Clock} label="Em aberto" value={stats.open} tone="bg-amber-100 text-amber-700" detail="Pedem atenção" />
                   <StatCard icon={CheckCircle2} label="Concluídos" value={stats.done} tone="bg-emerald-100 text-emerald-700" detail="Atendimentos finalizados" />
                   <StatCard icon={TrendingUp} label="Categorias" value={categories.length} tone="bg-sky-100 text-sky-700" detail="Áreas disponíveis" />
+                </motion.div>
+              )}
+
+              {stats && (
+                <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4 mb-6">
+                  <InsightBars
+                    title="Distribuição por status"
+                    subtitle="Onde os chamados estão concentrados agora"
+                    items={stats.by_status || []}
+                    getLabel={(item) => item.label || STATUS_LABELS[item.status] || item.status}
+                  />
+                  <InsightBars
+                    title="Categorias mais acionadas"
+                    subtitle="Áreas com maior volume de solicitações"
+                    items={stats.by_category || []}
+                    getLabel={(item) => item.name || "Sem categoria"}
+                  />
                 </motion.div>
               )}
 
