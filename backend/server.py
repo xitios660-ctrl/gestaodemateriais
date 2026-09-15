@@ -925,7 +925,8 @@ async def track_ticket(q: str):
 
 @api_router.get("/tickets")
 async def list_tickets(status: Optional[str] = None, category_id: Optional[str] = None,
-                       search: Optional[str] = None, user: dict = Depends(get_current_user)):
+                       search: Optional[str] = None, page: int = 1, limit: int = 50,
+                       paginated: bool = False, user: dict = Depends(get_current_user)):
     query = {}
     if status and status != "all":
         query["status"] = status
@@ -945,6 +946,27 @@ async def list_tickets(status: Optional[str] = None, category_id: Optional[str] 
             query["category_id"] = category_id
         else:
             query["category_id"] = {"$in": cats}
+
+    if paginated:
+        safe_limit = min(max(limit, 10), 100)
+        safe_page = max(page, 1)
+        total = await db.tickets.count_documents(query)
+        docs = await (
+            db.tickets.find(query)
+            .sort("created_at", -1)
+            .skip((safe_page - 1) * safe_limit)
+            .limit(safe_limit)
+            .to_list(safe_limit)
+        )
+        pages = max(1, (total + safe_limit - 1) // safe_limit)
+        return {
+            "items": [ser_ticket(d) for d in docs],
+            "total": total,
+            "page": safe_page,
+            "limit": safe_limit,
+            "pages": pages,
+        }
+
     docs = await db.tickets.find(query).sort("created_at", -1).to_list(1000)
     return [ser_ticket(d) for d in docs]
 
@@ -1130,6 +1152,10 @@ async def startup():
     await db.users.create_index("email", unique=True)
     await db.login_attempts.create_index("identifier")
     await db.tickets.create_index("ticket_number", unique=True)
+    await db.tickets.create_index([("category_id", 1), ("created_at", -1)])
+    await db.tickets.create_index([("status", 1), ("created_at", -1)])
+    await db.tickets.create_index("requester.email")
+    await db.tickets.create_index("requester.matricula")
     await db.password_reset_tokens.create_index("token_hash", unique=True)
     await db.password_reset_tokens.create_index("email")
     await db.password_reset_requests.create_index("email")
