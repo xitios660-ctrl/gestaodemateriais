@@ -29,7 +29,9 @@ api.interceptors.response.use(
         await refreshing;
         return api(original);
       } catch {
-        // Session really expired. The calling screen will handle the 401.
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("auth:expired"));
+        }
       }
     }
 
