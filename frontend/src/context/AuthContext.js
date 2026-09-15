@@ -32,7 +32,6 @@ export function AuthProvider({ children }) {
     checkedSession.current = true;
     checkSession();
     // A single session probe is enough for the lifetime of this SPA mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsSession]);
 
   useEffect(() => {
