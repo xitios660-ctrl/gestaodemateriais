@@ -14,7 +14,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { toast } from "sonner";
 import {
   LogOut, LayoutGrid, Ticket, Search, Clock, CheckCircle2, Inbox,
-  TrendingUp, Download, Mail, Paperclip, Users, SlidersHorizontal,
+  TrendingUp, Download, Mail, Paperclip, Users, SlidersHorizontal, AlertTriangle,
   ChevronRight, ChevronLeft, RefreshCw, X, Sparkles
 } from "lucide-react";
 
@@ -70,8 +70,8 @@ function StatCard({ icon: Icon, label, value, tone, detail }) {
 
 function DashboardSkeleton() {
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
-      {[0, 1, 2, 3].map((i) => (
+    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 mb-6">
+      {[0, 1, 2, 3, 4].map((i) => (
         <div key={i} className="premium-surface rounded-2xl p-5 h-28">
           <div className="h-3 w-24 rounded skeleton-shimmer" />
           <div className="h-8 w-14 rounded-lg skeleton-shimmer mt-4" />
@@ -373,9 +373,10 @@ export default function AdminDashboard() {
               {!stats ? (
                 <DashboardSkeleton />
               ) : (
-                <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+                <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 mb-6">
                   <StatCard icon={Inbox} label="Total" value={stats.total} tone="bg-purple-100 text-purple-700" detail="Chamados registrados" />
-                  <StatCard icon={Clock} label="Em aberto" value={stats.open} tone="bg-amber-100 text-amber-700" detail="Pedem atenção" />
+                  <StatCard icon={Clock} label="Em aberto" value={stats.open} tone="bg-amber-100 text-amber-700" detail={stats.due_soon ? `${stats.due_soon} vencem em até 6h` : "Pedem atenção"} />
+                  <StatCard icon={AlertTriangle} label="SLA vencido" value={stats.overdue} tone={stats.overdue ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-500"} detail="Chamados ativos atrasados" />
                   <StatCard icon={CheckCircle2} label="Concluídos" value={stats.done} tone="bg-emerald-100 text-emerald-700" detail="Atendimentos finalizados" />
                   <StatCard icon={TrendingUp} label="Categorias" value={categories.length} tone="bg-sky-100 text-sky-700" detail="Áreas disponíveis" />
                 </motion.div>
