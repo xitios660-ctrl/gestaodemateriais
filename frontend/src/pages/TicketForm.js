@@ -191,6 +191,7 @@ export default function TicketForm() {
       if (file) form.append("file", file);
       const { data } = await api.post("/tickets", form, {
         headers: { "Content-Type": "multipart/form-data" },
+        timeout: 120000,
       });
       setSuccess(data);
       window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });

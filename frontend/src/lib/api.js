@@ -13,11 +13,23 @@ export const api = axios.create({
 
 let refreshing = null;
 
+api.interceptors.request.use((config) => {
+  if (!config.headers["X-Request-ID"]) {
+    const generated =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    config.headers["X-Request-ID"] = generated;
+  }
+  return config;
+});
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const original = error.config;
     const status = error.response?.status;
+    error.requestId = error.response?.headers?.["x-request-id"] || original?.headers?.["X-Request-ID"] || null;
     const isAuthRoute = original?.url?.includes("/auth/login") || original?.url?.includes("/auth/refresh");
 
     if (status === 401 && original && !original._retried && !isAuthRoute) {

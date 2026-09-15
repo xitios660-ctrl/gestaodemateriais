@@ -353,7 +353,10 @@ export default function AdminDashboard() {
 
   const downloadFile = async (t) => {
     try {
-      const resp = await api.get(`/files/${t.file.storage_path}`, { responseType: "blob" });
+      const resp = await api.get(`/files/${t.file.storage_path}`, {
+        responseType: "blob",
+        timeout: 120000,
+      });
       const url = URL.createObjectURL(resp.data);
       const a = document.createElement("a");
       a.href = url;
