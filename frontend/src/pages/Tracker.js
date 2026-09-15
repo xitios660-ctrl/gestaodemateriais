@@ -25,13 +25,13 @@ function Timeline({ status }) {
 
   const idx = STATUS_FLOW.indexOf(status);
   return (
-    <div className="overflow-x-auto pb-1">
-      <div className="flex items-start min-w-[460px]">
+    <div className="pb-1">
+      <div className="flex items-start w-full">
         {STATUS_FLOW.map((s, i) => (
-          <div key={s} className="flex items-center flex-1 last:flex-none">
-            <div className="flex flex-col items-center">
+          <div key={s} className="flex items-center flex-1 min-w-0 last:flex-none">
+            <div className="flex flex-col items-center min-w-0">
               {i <= idx ? <CheckCircle2 className="w-6 h-6 text-purple-600" /> : <Circle className="w-6 h-6 text-slate-300" />}
-              <span className={`text-[11px] mt-1.5 whitespace-nowrap ${i <= idx ? "text-purple-700 font-semibold" : "text-slate-400"}`}>
+              <span className={`text-[10px] sm:text-[11px] mt-1.5 text-center leading-tight max-w-[74px] ${i <= idx ? "text-purple-700 font-semibold" : "text-slate-400"}`}>
                 {STATUS_LABELS[s]}
               </span>
             </div>
@@ -61,7 +61,7 @@ function ResultSkeleton() {
 }
 
 export default function Tracker() {
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const reduceMotion = useReducedMotion();
   const [query, setQuery] = useState(params.get("q") || "");
@@ -77,6 +77,7 @@ export default function Tracker() {
     try {
       const { data } = await api.get("/tickets/track", { params: { q: term } });
       setResults(data);
+      setParams({ q: term }, { replace: true });
     } catch {
       setFailed(true);
       setResults(null);
