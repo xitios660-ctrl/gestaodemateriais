@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import {
   LogOut, LayoutGrid, Ticket, Search, Clock, CheckCircle2, Inbox,
   TrendingUp, Download, Mail, Paperclip, Users, SlidersHorizontal, AlertTriangle,
-  ChevronRight, ChevronLeft, RefreshCw, X, Sparkles
+  ChevronRight, ChevronLeft, RefreshCw, X, Sparkles, Activity
 } from "lucide-react";
 
 function fmt(dt) {
@@ -113,6 +113,45 @@ function InsightBars({ title, subtitle, items, getLabel }) {
               </div>
             );
           })}
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+function RecentActivity({ items = [] }) {
+  return (
+    <motion.div variants={fadeUp} className="premium-card p-5">
+      <div className="mb-4">
+        <h2 className="font-display text-sm font-bold text-slate-900">Atividade recente</h2>
+        <p className="text-xs text-slate-400 mt-0.5">Últimos chamados registrados no sistema</p>
+      </div>
+      {items.length === 0 ? (
+        <p className="text-sm text-slate-400 py-5">Ainda não há atividade recente.</p>
+      ) : (
+        <div className="space-y-1">
+          {items.map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              onClick={() => {
+                const match = document.querySelector(`[data-ticket-id="${item.id}"]`);
+                match?.click();
+              }}
+              className="w-full flex items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-purple-50/70 transition-colors"
+            >
+              <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
+                <CategoryIcon name={item.category_icon} className="w-4 h-4 text-purple-600" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="font-mono text-xs font-bold text-slate-800 truncate">{item.ticket_number}</p>
+                <p className="text-[11px] text-slate-400 truncate">{item.category_name} · {fmt(item.created_at)}</p>
+              </div>
+              <span className={`hidden sm:inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${STATUS_STYLES[item.status]}`}>
+                {item.status_label}
+              </span>
+            </button>
+          ))}
         </div>
       )}
     </motion.div>
@@ -383,7 +422,7 @@ export default function AdminDashboard() {
               )}
 
               {stats && (
-                <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4 mb-6">
+                <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 mb-6">
                   <InsightBars
                     title="Distribuição por status"
                     subtitle="Onde os chamados estão concentrados agora"
@@ -396,6 +435,7 @@ export default function AdminDashboard() {
                     items={stats.by_category || []}
                     getLabel={(item) => item.name || "Sem categoria"}
                   />
+                  <RecentActivity items={stats.recent || []} />
                 </motion.div>
               )}
 
