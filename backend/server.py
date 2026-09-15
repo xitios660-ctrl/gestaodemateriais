@@ -28,7 +28,7 @@ import httpx
 import requests
 from fastapi import FastAPI, APIRouter, Request, Response, HTTPException, Depends, UploadFile, File, Form, BackgroundTasks
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import Response as StarletteResponse
+from starlette.responses import Response as StarletteResponse, FileResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict, EmailStr
 from bson import ObjectId
@@ -39,15 +39,18 @@ from bson import ObjectId
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+db_name = os.environ.get("DB_NAME", "gestao_materiais")
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=10000)
+db = client[db_name]
 
-app = FastAPI()
+app = FastAPI(title="Gestão de Materiais API", version="1.0.0")
 api_router = APIRouter(prefix="/api")
 
 JWT_ALGORITHM = "HS256"
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+LOCAL_STORAGE_DIR = Path(os.environ.get("STORAGE_DIR", ROOT_DIR / "uploads"))
+LOCAL_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Object storage
 STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
@@ -106,7 +109,13 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def get_jwt_secret() -> str:
-    return os.environ["JWT_SECRET"]
+    secret = os.environ.get("JWT_SECRET")
+    if secret:
+        return secret
+    # Development fallback only. Production deployments should always set JWT_SECRET.
+    if os.environ.get("RENDER") or os.environ.get("ENVIRONMENT") == "production":
+        raise RuntimeError("JWT_SECRET não configurado")
+    return "dev-only-change-me-please-32-characters"
 
 
 def create_access_token(user_id: str, email: str, token_version: int = 0) -> str:
@@ -122,10 +131,16 @@ def create_refresh_token(user_id: str, token_version: int = 0) -> str:
 
 
 def set_auth_cookies(response: Response, access: str, refresh: str):
-    response.set_cookie(key="access_token", value=access, httponly=True, secure=True,
-                        samesite="none", max_age=900, path="/")
-    response.set_cookie(key="refresh_token", value=refresh, httponly=True, secure=True,
-                        samesite="none", max_age=604800, path="/")
+    force_secure = os.environ.get("COOKIE_SECURE")
+    if force_secure is None:
+        secure = FRONTEND_URL.startswith("https://")
+    else:
+        secure = force_secure.lower() in ("1", "true", "yes")
+    same_site = "lax"
+    response.set_cookie(key="access_token", value=access, httponly=True, secure=secure,
+                        samesite=same_site, max_age=900, path="/")
+    response.set_cookie(key="refresh_token", value=refresh, httponly=True, secure=secure,
+                        samesite=same_site, max_age=604800, path="/")
 
 
 async def get_current_user(request: Request) -> dict:
@@ -170,8 +185,20 @@ def scope_match(user: dict) -> dict:
 # ----------------------------------------------------------------------------
 # Object storage helpers
 # ----------------------------------------------------------------------------
+def _safe_local_path(path: str) -> Path:
+    clean = path.lstrip("/").replace("\\", "/")
+    target = (LOCAL_STORAGE_DIR / clean).resolve()
+    root = LOCAL_STORAGE_DIR.resolve()
+    if root not in target.parents and target != root:
+        raise ValueError("Caminho de arquivo inválido")
+    return target
+
+
 def init_storage(force: bool = False):
+    """Use Emergent object storage when configured; otherwise use local disk."""
     global storage_key
+    if not EMERGENT_KEY:
+        return None
     if storage_key and not force:
         return storage_key
     resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
@@ -181,6 +208,12 @@ def init_storage(force: bool = False):
 
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
+    if not EMERGENT_KEY:
+        target = _safe_local_path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return {"path": path, "storage": "local"}
+
     key = init_storage()
     resp = requests.put(f"{STORAGE_URL}/objects/{path}",
                         headers={"X-Storage-Key": key, "Content-Type": content_type},
@@ -195,6 +228,12 @@ def put_object(path: str, data: bytes, content_type: str) -> dict:
 
 
 def get_object(path: str):
+    if not EMERGENT_KEY:
+        target = _safe_local_path(path)
+        if not target.exists() or not target.is_file():
+            raise HTTPException(status_code=404, detail="Arquivo não encontrado")
+        return target.read_bytes(), "application/octet-stream"
+
     key = init_storage()
     resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
     if resp.status_code == 404:
@@ -1015,6 +1054,12 @@ async def seed_categories():
 
 @app.on_event("startup")
 async def startup():
+    try:
+        await client.admin.command("ping")
+        logger.info("MongoDB conectado: %s", db_name)
+    except Exception as e:
+        logger.error("Falha ao conectar no MongoDB: %s", e)
+        raise
     await db.users.create_index("email", unique=True)
     await db.login_attempts.create_index("identifier")
     await db.tickets.create_index("ticket_number", unique=True)
@@ -1025,25 +1070,56 @@ async def startup():
     await seed_categories()
     try:
         init_storage()
-        logger.info("Storage initialized")
+        logger.info("Storage inicializado (%s)", "Emergent" if EMERGENT_KEY else f"local: {LOCAL_STORAGE_DIR}")
     except Exception as e:
-        logger.error(f"Storage init failed: {e}")
+        logger.warning("Storage remoto indisponível, usando disco local: %s", e)
 
 
 @api_router.get("/")
 async def root():
-    return {"message": "Central de Serviços API"}
+    return {"message": "Gestão de Materiais API", "status": "ok"}
+
+
+@api_router.get("/health")
+async def health():
+    try:
+        await client.admin.command("ping")
+        return {"status": "ok", "database": "connected"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Banco indisponível: {e}")
 
 
 app.include_router(api_router)
 
+configured_origins = [
+    origin.strip().rstrip("/")
+    for origin in os.environ.get("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+allowed_origins = list(dict.fromkeys([
+    FRONTEND_URL,
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    *configured_origins,
+]))
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=[FRONTEND_URL, "http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+FRONTEND_BUILD_DIR = (ROOT_DIR.parent / "frontend" / "build").resolve()
+
+if FRONTEND_BUILD_DIR.exists():
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        requested = (FRONTEND_BUILD_DIR / full_path).resolve()
+        if FRONTEND_BUILD_DIR in requested.parents and requested.is_file():
+            return FileResponse(requested)
+        return FileResponse(FRONTEND_BUILD_DIR / "index.html")
 
 
 @app.on_event("shutdown")
