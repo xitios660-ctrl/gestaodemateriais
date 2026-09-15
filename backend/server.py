@@ -75,6 +75,7 @@ SMTP_USERNAME = (os.environ.get("SMTP_USERNAME") or "").strip()
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD") or ""
 SMTP_FROM_EMAIL = (os.environ.get("SMTP_FROM_EMAIL") or SMTP_USERNAME).strip()
 SMTP_STARTTLS = (os.environ.get("SMTP_STARTTLS") or "true").strip().lower() in ("1", "true", "yes")
+EMAIL_SMOKE_TEST_TO = (os.environ.get("EMAIL_SMOKE_TEST_TO") or "").strip().lower()
 DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
 PRIMARY_NOTIFICATION_EMAIL = (os.environ.get("PRIMARY_NOTIFICATION_EMAIL") or DEFAULT_OWNER_EMAIL).strip().lower()
 DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
@@ -451,7 +452,7 @@ def _smtp_send(to: str, subject: str, html: str) -> str:
     context = ssl.create_default_context()
     if SMTP_PORT == 465:
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=25, context=context) as smtp:
-            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD.replace(" ", ""))
             smtp.send_message(message)
     else:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=25) as smtp:
@@ -459,7 +460,7 @@ def _smtp_send(to: str, subject: str, html: str) -> str:
             if SMTP_STARTTLS:
                 smtp.starttls(context=context)
                 smtp.ehlo()
-            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD.replace(" ", ""))
             smtp.send_message(message)
     return f"smtp:{uuid.uuid4()}"
 
@@ -485,7 +486,7 @@ async def send_email(to: str, subject: str, html: str) -> Optional[str]:
         try:
             return await asyncio.to_thread(_smtp_send, to, subject, html)
         except Exception as exc:
-            logger.error("SMTP send error to %s: %s", to, type(exc).__name__)
+            logger.error("SMTP send error to %s: %s: %s", to, type(exc).__name__, str(exc)[:240])
             return None
 
     logger.error("E-mail não configurado. Defina EMERGENT_EMAIL_KEY ou SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD/SMTP_FROM_EMAIL")
@@ -1716,6 +1717,13 @@ async def startup():
     await seed_admin()
     await seed_categories()
     logger.info("Email delivery configured: %s", "yes" if email_delivery_configured() else "no")
+    if EMAIL_SMOKE_TEST_TO:
+        test_id = await send_email(
+            EMAIL_SMOKE_TEST_TO,
+            "Teste de e-mail - Gestão de Materiais",
+            "<p>Teste automático de envio do sistema Gestão de Materiais.</p>",
+        )
+        logger.info("Email smoke test: %s", "sent" if test_id else "failed")
     try:
         await init_storage()
         logger.info("Storage inicializado (%s)", "Emergent" if EMERGENT_KEY else f"local: {LOCAL_STORAGE_DIR}")
