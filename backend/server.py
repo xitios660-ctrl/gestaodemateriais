@@ -63,6 +63,8 @@ storage_key = None
 EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME") or "Central de Serviços"
+DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
+DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
 
 STATUS_LABELS = {
     "aberto": "Aberto",
@@ -1053,7 +1055,7 @@ DEFAULT_CATEGORIES = [
     {
         "name": "Informática & TI", "icon": "Laptop",
         "description": "Suporte a computadores, periféricos, softwares, rede e sistemas de TI",
-        "lead_time_hours": 4, "owners": ["matheus.cardosooliveira1@gmail.com"], "active": True,
+        "lead_time_hours": 4, "owners": DEFAULT_OWNERS, "active": True,
         "fields": [
             {"id": str(uuid.uuid4()), "label": "Tipo de problema", "type": "select", "required": True,
              "options": ["Hardware", "Software", "Rede/Internet", "Impressora", "E-mail", "Outro"]},
@@ -1065,7 +1067,7 @@ DEFAULT_CATEGORIES = [
     {
         "name": "Acessos e Permissões", "icon": "KeyRound",
         "description": "Criação, alteração ou revogação de acessos a sistemas e pastas compartilhadas",
-        "lead_time_hours": 8, "owners": ["matheus.cardosooliveira1@gmail.com"], "active": True,
+        "lead_time_hours": 8, "owners": DEFAULT_OWNERS, "active": True,
         "fields": [
             {"id": str(uuid.uuid4()), "label": "Sistema / Recurso", "type": "text", "required": True, "options": []},
             {"id": str(uuid.uuid4()), "label": "Tipo de solicitação", "type": "select", "required": True,
@@ -1076,7 +1078,7 @@ DEFAULT_CATEGORIES = [
     {
         "name": "Férias e RH", "icon": "CalendarCheck",
         "description": "Solicitação de agendamento, alteração ou dúvidas sobre férias e benefícios",
-        "lead_time_hours": 24, "owners": ["matheus.cardosooliveira1@gmail.com"], "active": True,
+        "lead_time_hours": 24, "owners": DEFAULT_OWNERS, "active": True,
         "fields": [
             {"id": str(uuid.uuid4()), "label": "Tipo de solicitação", "type": "select", "required": True,
              "options": ["Agendar férias", "Alterar férias", "Dúvida sobre benefícios"]},
@@ -1087,7 +1089,7 @@ DEFAULT_CATEGORIES = [
     {
         "name": "Criação de Centros", "icon": "Building2",
         "description": "Abertura de novos centros de custo, unidades operacionais ou projetos",
-        "lead_time_hours": 48, "owners": ["matheus.cardosooliveira1@gmail.com"], "active": True,
+        "lead_time_hours": 48, "owners": DEFAULT_OWNERS, "active": True,
         "template_columns": ["Endereço físico", "CNPJ", "Inscrição Estadual"],
         "template_filename": "modelo-criacao-centros.xlsx",
         "fields": [
@@ -1101,7 +1103,7 @@ DEFAULT_CATEGORIES = [
     {
         "name": "Reabastecimento", "icon": "PackagePlus",
         "description": "Solicitação de materiais de escritório, insumos de copa e suprimentos",
-        "lead_time_hours": 12, "owners": ["matheus.cardosooliveira1@gmail.com"], "active": True,
+        "lead_time_hours": 12, "owners": DEFAULT_OWNERS, "active": True,
         "fields": [
             {"id": str(uuid.uuid4()), "label": "Categoria do item", "type": "select", "required": True,
              "options": ["Material de escritório", "Copa/Cozinha", "Limpeza", "Suprimentos de TI"]},
