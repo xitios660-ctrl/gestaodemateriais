@@ -61,3 +61,11 @@ jobs:
           ADMIN_PASSWORD: ci-only-admin-password-123
           MONGO_URL: mongodb://localhost:27017
         run: python -c "import sys; sys.path.insert(0, 'backend'); import server; print(server.app.title)"
+
+      - name: Security helper tests
+        env:
+          JWT_SECRET: ci-only-jwt-secret-that-is-long-enough
+          ADMIN_EMAIL: ci-admin@example.com
+          ADMIN_PASSWORD: ci-only-admin-password-123
+          MONGO_URL: mongodb://localhost:27017
+        run: PYTHONPATH=backend pytest -q backend/tests/test_security_helpers.py
