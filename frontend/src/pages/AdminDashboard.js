@@ -7,6 +7,7 @@ import { CategoryIcon, STATUS_STYLES, STATUS_LABELS } from "@/lib/ui";
 import { fadeUp, stagger, tap } from "@/lib/motion";
 import CategoryManager from "@/components/CategoryManager";
 import UserManager from "@/components/UserManager";
+import AuditManager from "@/components/AuditManager";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,7 +16,7 @@ import { toast } from "sonner";
 import {
   LogOut, LayoutGrid, Ticket, Search, Clock, CheckCircle2, Inbox,
   TrendingUp, Download, Mail, Paperclip, Users, SlidersHorizontal, AlertTriangle,
-  ChevronRight, ChevronLeft, RefreshCw, X, Sparkles
+  ChevronRight, ChevronLeft, RefreshCw, X, Sparkles, History
 } from "lucide-react";
 
 function fmt(dt) {
@@ -322,6 +323,7 @@ export default function AdminDashboard() {
     { id: "tickets", label: "Chamados", icon: Ticket, visible: true },
     { id: "categories", label: "Categorias", icon: LayoutGrid, visible: user?.role === "admin" },
     { id: "users", label: "Usuários", icon: Users, visible: user?.role === "admin" },
+    { id: "audit", label: "Auditoria", icon: History, visible: user?.role === "admin" },
   ].filter((item) => item.visible);
 
   return (
@@ -597,6 +599,12 @@ export default function AdminDashboard() {
           {tab === "users" && (
             <motion.section key="users" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
               <UserManager />
+            </motion.section>
+          )}
+
+          {tab === "audit" && (
+            <motion.section key="audit" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
+              <AuditManager />
             </motion.section>
           )}
         </AnimatePresence>
