@@ -2,36 +2,36 @@ import asyncio
 import os
 from datetime import datetime, timezone
 
-import bcrypt
 from motor.motor_asyncio import AsyncIOMotorClient
 
 
 async def main():
     email = (os.environ.get("ADMIN_MIGRATION_EMAIL") or "").strip().lower()
-    password = os.environ.get("ADMIN_MIGRATION_PASSWORD") or ""
-    if not email and not password:
+    password_hash = os.environ.get("ADMIN_MIGRATION_PASSWORD_HASH") or ""
+
+    if not email and not password_hash:
         print("Admin migration skipped")
         return
-    if not email or not password:
-        raise RuntimeError("ADMIN_MIGRATION_EMAIL and ADMIN_MIGRATION_PASSWORD must both be set")
-    if len(password) < 8:
-        raise RuntimeError("Admin migration password must have at least 8 characters")
+    if not email or not password_hash:
+        raise RuntimeError("ADMIN_MIGRATION_EMAIL and ADMIN_MIGRATION_PASSWORD_HASH must both be set")
+    if not password_hash.startswith(("$2a$", "$2b$", "$2y$")):
+        raise RuntimeError("Admin migration password hash is invalid")
 
     mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
     db_name = os.environ.get("DB_NAME", "gestao_materiais")
     client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=10000)
     db = client[db_name]
+
     try:
         await client.admin.command("ping")
         target = await db.users.find_one({"email": email})
         admin = target if target and target.get("role") == "admin" else await db.users.find_one({"role": "admin"})
 
-        if target and admin and target["_id"] != admin["_id"]:
-            raise RuntimeError("Target e-mail already belongs to another user")
         if target and target.get("role") != "admin":
             raise RuntimeError("Target e-mail belongs to a non-admin user")
+        if target and admin and target["_id"] != admin["_id"]:
+            raise RuntimeError("Target e-mail already belongs to another user")
 
-        password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         now = datetime.now(timezone.utc).isoformat()
 
         if admin:
