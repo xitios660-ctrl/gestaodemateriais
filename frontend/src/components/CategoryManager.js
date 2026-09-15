@@ -104,22 +104,22 @@ export default function CategoryManager({ categories, onChange }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
         <p className="text-sm text-slate-500">{categories.length} categoria(s) cadastrada(s)</p>
-        <Button data-testid="admin-category-create-button" onClick={openNew} className="bg-[#660099] hover:bg-[#520080] gap-2">
+        <Button data-testid="admin-category-create-button" onClick={openNew} className="bg-[#660099] hover:bg-[#520080] gap-2 shadow-md shadow-purple-500/15 w-full sm:w-auto">
           <Plus className="w-4 h-4" /> Nova Categoria
         </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {categories.map((c) => (
-          <div key={c.id} data-testid={`category-item-${c.id}`} className="bg-white rounded-2xl border border-purple-100 p-5">
+          <div key={c.id} data-testid={`category-item-${c.id}`} className="premium-card p-5">
             <div className="flex items-start gap-3">
               <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#660099] to-[#9b26b6] flex items-center justify-center shadow-lg shadow-purple-500/25 shrink-0">
                 <CategoryIcon name={c.icon} className="w-5 h-5 text-white" />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                   <h3 className="font-display font-semibold text-slate-900 truncate">{c.name}</h3>
                   {c.active === false && <span className="text-[10px] bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded">inativa</span>}
                 </div>
@@ -144,7 +144,7 @@ export default function CategoryManager({ categories, onChange }) {
       </div>
 
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl sm:rounded-3xl border-purple-100">
           <DialogHeader>
             <DialogTitle>{editing === "new" ? "Nova Categoria" : "Editar Categoria"}</DialogTitle>
           </DialogHeader>
@@ -238,12 +238,12 @@ export default function CategoryManager({ categories, onChange }) {
                   <p className="text-sm text-slate-400 text-center py-4 bg-slate-50 rounded-xl">Nenhum campo. Adicione campos personalizados.</p>
                 )}
                 {form.fields.map((f) => (
-                  <div key={f.id} data-testid={`field-editor-${f.id}`} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                  <div key={f.id} data-testid={`field-editor-${f.id}`} className="bg-slate-50/80 rounded-xl p-3 border border-slate-100">
                     <div className="flex items-center gap-2">
-                      <GripVertical className="w-4 h-4 text-slate-300" />
+                      <GripVertical className="hidden sm:block w-4 h-4 text-slate-300 shrink-0" />
                       <Input value={f.label} onChange={(e) => updateField(f.id, { label: e.target.value })} placeholder="Título do campo" className="flex-1 bg-white h-9" />
                       <Select value={f.type} onValueChange={(v) => updateField(f.id, { type: v })}>
-                        <SelectTrigger className="w-40 bg-white h-9"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-full sm:w-40 bg-white h-9"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {FIELD_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
                         </SelectContent>
@@ -257,10 +257,10 @@ export default function CategoryManager({ categories, onChange }) {
                         value={(f.options || []).join(", ")}
                         onChange={(e) => updateField(f.id, { options: e.target.value.split(",").map((s) => s.trim()) })}
                         placeholder="Opções separadas por vírgula: Opção A, Opção B"
-                        className="mt-2 ml-6 bg-white h-9"
+                        className="mt-2 sm:ml-6 bg-white h-9"
                       />
                     )}
-                    <label className="flex items-center gap-2 mt-2 ml-6 cursor-pointer">
+                    <label className="flex items-center gap-2 mt-2 sm:ml-6 cursor-pointer">
                       <Checkbox checked={f.required} onCheckedChange={(v) => updateField(f.id, { required: !!v })} />
                       <span className="text-xs text-slate-600">Campo obrigatório</span>
                     </label>
