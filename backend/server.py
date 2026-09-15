@@ -1148,12 +1148,40 @@ async def admin_stats(user: dict = Depends(get_current_user)):
         {"$match": match},
         {"$group": {"_id": "$status", "count": {"$sum": 1}}}
     ]).to_list(20)
+    recent_docs = await (
+        db.tickets.find(
+            match,
+            {
+                "ticket_number": 1,
+                "category_name": 1,
+                "category_icon": 1,
+                "status": 1,
+                "created_at": 1,
+            },
+        )
+        .sort("created_at", -1)
+        .limit(6)
+        .to_list(6)
+    )
+    recent = [
+        {
+            "id": str(item["_id"]),
+            "ticket_number": item.get("ticket_number", ""),
+            "category_name": item.get("category_name", ""),
+            "category_icon": item.get("category_icon", "CircleHelp"),
+            "status": item.get("status", "aberto"),
+            "status_label": STATUS_LABELS.get(item.get("status"), item.get("status")),
+            "created_at": item.get("created_at"),
+        }
+        for item in recent_docs
+    ]
     return {
         "total": total,
         "open": open_count,
         "done": done,
         "overdue": overdue,
         "due_soon": due_soon,
+        "recent": recent,
         "by_category": [{"name": c["_id"], "count": c["count"]} for c in by_cat],
         "by_status": [{"status": s["_id"], "label": STATUS_LABELS.get(s["_id"], s["_id"]), "count": s["count"]} for s in by_status],
     }
