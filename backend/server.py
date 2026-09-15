@@ -32,7 +32,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import Response as StarletteResponse, FileResponse, JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, Field, BeforeValidator, ConfigDict, EmailStr
+from pydantic import BaseModel, Field, BeforeValidator, ConfigDict, EmailStr, model_validator
 from bson import ObjectId
 
 # ----------------------------------------------------------------------------
@@ -585,6 +585,24 @@ class CategoryInput(BaseModel):
     template_filename: Optional[str] = Field(default=None, max_length=180)
     active: bool = True
 
+    @model_validator(mode="after")
+    def validate_form(self):
+        self.name = self.name.strip()
+        if not self.name:
+            raise ValueError("Informe o nome da categoria")
+        labels, ids = set(), set()
+        for field in self.fields:
+            field.label = field.label.strip()
+            if not field.label or field.label.casefold() in labels or field.id in ids:
+                raise ValueError("Os campos precisam de títulos e identificadores únicos")
+            labels.add(field.label.casefold())
+            ids.add(field.id)
+            field.options = list(dict.fromkeys(option.strip() for option in field.options if option.strip()))
+            if field.type == "select" and not field.options:
+                raise ValueError(f"Informe as opções do campo: {field.label}")
+        self.template_columns = list(dict.fromkeys(c.strip() for c in self.template_columns if c.strip()))
+        return self
+
 
 class StatusUpdate(BaseModel):
     status: Literal["aberto", "em_analise", "em_andamento", "concluido", "cancelado"]
@@ -1031,6 +1049,9 @@ async def create_ticket(
     except Exception:
         raise HTTPException(status_code=400, detail="Dados da solicitação inválidos")
 
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Dados da solicitação inválidos")
+
     category_id = str(data.get("category_id") or "").strip()
     if not category_id:
         raise HTTPException(status_code=400, detail="Categoria obrigatória")
@@ -1043,8 +1064,10 @@ async def create_ticket(
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
 
     requester = data.get("requester", {})
+    if not isinstance(requester, dict):
+        raise HTTPException(status_code=400, detail="Dados do solicitante inválidos")
     for field in ("matricula", "email", "empresa"):
-        if not str(requester.get(field, "")).strip():
+        if not isinstance(requester.get(field), str) or not requester[field].strip():
             raise HTTPException(status_code=400, detail=f"Campo obrigatório: {field}")
     requester_email = str(requester.get("email", "")).strip().lower()
     if len(requester_email) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", requester_email):
@@ -1056,19 +1079,39 @@ async def create_ticket(
     if not isinstance(field_values, dict) or len(field_values) > 100:
         raise HTTPException(status_code=400, detail="Campos da solicitação inválidos")
     for field in category.get("fields", []):
-        if not field.get("required"):
-            continue
         value = field_values.get(field.get("label"))
-        missing = value is not True if field.get("type") == "checkbox" else not str(value or "").strip()
-        if missing:
+        missing = value is not True if field.get("type") == "checkbox" else value is None or not str(value).strip()
+        if field.get("required") and missing:
             raise HTTPException(status_code=400, detail=f"Campo obrigatório: {field.get('label', 'campo')}")
+        if value is None or value == "":
+            continue
+        field_type = field.get("type")
+        if field_type == "select" and value not in field.get("options", []):
+            raise HTTPException(status_code=400, detail=f"Opção inválida: {field['label']}")
+        if field_type == "checkbox" and not isinstance(value, bool):
+            raise HTTPException(status_code=400, detail=f"Valor inválido: {field['label']}")
+        if field_type in {"number", "date"}:
+            try:
+                if field_type == "date":
+                    datetime.strptime(str(value), "%Y-%m-%d")
+                else:
+                    from math import isfinite
+                    if isinstance(value, bool) or not isfinite(float(value)):
+                        raise ValueError()
+            except (ValueError, TypeError, OverflowError):
+                raise HTTPException(status_code=400, detail=f"Valor inválido: {field['label']}")
     for key, value in field_values.items():
         if len(str(key)) > 160 or len(str(value)) > 10000:
             raise HTTPException(status_code=400, detail="Um dos campos excede o limite permitido")
 
     file_ref = None
+    needs_template = bool(category.get("template_columns"))
+    if needs_template and file is None:
+        raise HTTPException(status_code=400, detail="Anexe a planilha modelo preenchida")
     if file is not None:
-        raw = await file.read()
+        raw = await file.read(10 * 1024 * 1024 + 1)
+        if not raw:
+            raise HTTPException(status_code=400, detail="O arquivo está vazio")
         if raw:
             if len(raw) > 10 * 1024 * 1024:
                 raise HTTPException(status_code=400, detail="Arquivo excede 10MB")
@@ -1077,6 +1120,8 @@ async def create_ticket(
             allowed_extensions = {"pdf", "png", "jpg", "jpeg", "doc", "docx", "xls", "xlsx", "csv", "txt"}
             if ext not in allowed_extensions:
                 raise HTTPException(status_code=400, detail="Tipo de arquivo não permitido")
+            if needs_template and ext != "xlsx":
+                raise HTTPException(status_code=400, detail="Anexe o modelo preenchido em formato XLSX")
             path = f"{APP_NAME}/tickets/{uuid.uuid4()}.{ext}"
             result = await put_object(path, raw, file.content_type or "application/octet-stream")
             file_ref = {
@@ -1140,12 +1185,14 @@ def build_ticket_query(
     search: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    overdue: bool = False,
+    due_soon: bool = False,
 ) -> dict:
     query = {}
     if status and status != "all":
-        if status not in STATUS_LABELS:
+        if status not in STATUS_LABELS and status != "active":
             raise HTTPException(status_code=400, detail="Status inválido")
-        query["status"] = status
+        query["status"] = {"$in": ["aberto", "em_analise", "em_andamento"]} if status == "active" else status
     if category_id and category_id != "all":
         query["category_id"] = category_id
     if search:
@@ -1168,12 +1215,25 @@ def build_ticket_query(
                 created_range["$lt"] = end.isoformat()
         except ValueError:
             raise HTTPException(status_code=400, detail="Período do relatório inválido")
+        if start_date and end_date and start_date > end_date:
+            raise HTTPException(status_code=400, detail="A data final deve ser igual ou posterior à inicial")
         query["created_at"] = created_range
+
+    if overdue or due_soon:
+        active = ["aberto", "em_analise", "em_andamento"]
+        if status in STATUS_LABELS:
+            query["status"] = {"$in": [status] if status in active else []}
+        else:
+            query["status"] = {"$in": active}
+        now = datetime.now(timezone.utc)
+        query["due_at"] = {"$lt": now.isoformat()} if overdue else {
+            "$gte": now.isoformat(), "$lte": (now + timedelta(hours=6)).isoformat()
+        }
 
     if user.get("role") != "admin":
         cats = user.get("categories", []) or []
-        if category_id and category_id != "all" and category_id in cats:
-            query["category_id"] = category_id
+        if category_id and category_id != "all":
+            query["category_id"] = category_id if category_id in cats else {"$in": []}
         else:
             query["category_id"] = {"$in": cats}
     return query
@@ -1183,8 +1243,9 @@ def build_ticket_query(
 async def list_tickets(status: Optional[str] = None, category_id: Optional[str] = None,
                        search: Optional[str] = None, start_date: Optional[str] = None,
                        end_date: Optional[str] = None, page: int = 1, limit: int = 50,
-                       paginated: bool = False, user: dict = Depends(get_current_user)):
-    query = build_ticket_query(user, status, category_id, search, start_date, end_date)
+                       paginated: bool = False, overdue: bool = False, due_soon: bool = False,
+                       user: dict = Depends(get_current_user)):
+    query = build_ticket_query(user, status, category_id, search, start_date, end_date, overdue, due_soon)
 
     if paginated:
         safe_limit = min(max(limit, 10), 100)
@@ -1192,7 +1253,7 @@ async def list_tickets(status: Optional[str] = None, category_id: Optional[str] 
         total = await db.tickets.count_documents(query)
         docs = await (
             db.tickets.find(query)
-            .sort("created_at", -1)
+            .sort([("created_at", -1), ("_id", -1)])
             .skip((safe_page - 1) * safe_limit)
             .limit(safe_limit)
             .to_list(safe_limit)
@@ -1210,6 +1271,11 @@ async def list_tickets(status: Optional[str] = None, category_id: Optional[str] 
     return [ser_ticket(d) for d in docs]
 
 
+def safe_csv_value(value):
+    text = str(value if value is not None else "")
+    return "'" + text if re.match(r"^\s*[=+@\-\t\r\n]", text) else text
+
+
 @api_router.get("/admin/reports/tickets.csv")
 async def export_ticket_report(
     status: Optional[str] = None,
@@ -1217,20 +1283,24 @@ async def export_ticket_report(
     search: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    overdue: bool = False,
+    due_soon: bool = False,
     user: dict = Depends(get_current_user),
 ):
-    query = build_ticket_query(user, status, category_id, search, start_date, end_date)
+    query = build_ticket_query(user, status, category_id, search, start_date, end_date, overdue, due_soon)
+    if await db.tickets.count_documents(query) > 10000:
+        raise HTTPException(status_code=400, detail="Refine os filtros para exportar até 10.000 chamados por relatório")
     docs = await db.tickets.find(query).sort("created_at", -1).limit(10000).to_list(10000)
 
     output = StringIO()
-    writer = csv.writer(output)
+    writer = csv.writer(output, delimiter=";")
     writer.writerow([
         "Chamado", "Categoria", "Status", "Matrícula", "E-mail",
         "Empresa", "Aberto em", "Prazo (h)", "Previsão"
     ])
     for doc in docs:
         requester = doc.get("requester") or {}
-        writer.writerow([
+        writer.writerow([safe_csv_value(value) for value in [
             doc.get("ticket_number", ""),
             doc.get("category_name", ""),
             STATUS_LABELS.get(doc.get("status"), doc.get("status", "")),
@@ -1240,7 +1310,7 @@ async def export_ticket_report(
             doc.get("created_at", ""),
             doc.get("lead_time_hours", ""),
             doc.get("due_at", ""),
-        ])
+        ]])
 
     await write_audit(user, "report.export", "report", "tickets", {
         "rows": len(docs),

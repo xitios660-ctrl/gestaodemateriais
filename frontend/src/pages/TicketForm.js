@@ -1,476 +1,597 @@
-import { useEffect, useMemo, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import { motion, useReducedMotion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { api, formatApiErrorDetail } from "@/lib/api";
-import { CategoryIcon } from "@/lib/ui";
-import { fadeUp, stagger } from "@/lib/motion";
+import { CategoryIcon, fmt } from "@/lib/ui";
 import { SiteHeader } from "@/components/SiteHeader";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Reveal,
+  EmptyState,
+  PageLoading,
+  SiteFooter,
+} from "@/components/Experience";
 import { toast } from "sonner";
 import {
-  ArrowLeft, UploadCloud, Loader2, Clock, CheckCircle2, Copy, FileText,
-  X, Download, FileSpreadsheet, UserRound, ClipboardList, AlertCircle, RotateCw
+  ArrowLeft,
+  ArrowUpRight,
+  UploadCloud,
+  Loader2,
+  CheckCircle2,
+  Copy,
+  FileText,
+  X,
+  Download,
+  ShieldCheck,
+  AlertCircle,
+  Send,
 } from "lucide-react";
-
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
-const ACCEPTED_FILE_EXTENSIONS = ".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.csv,.txt";
-
-function FieldError({ children }) {
-  if (!children) return null;
-  return (
-    <p className="mt-1.5 text-xs font-medium text-rose-600 flex items-center gap-1" role="alert">
-      <AlertCircle className="w-3.5 h-3.5" /> {children}
-    </p>
-  );
-}
-
-function FormSkeleton() {
-  return (
-    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-10">
-      <div className="h-5 w-36 rounded skeleton-shimmer mb-7" />
-      <div className="flex gap-3 items-center mb-8">
-        <div className="h-12 w-12 rounded-xl skeleton-shimmer" />
-        <div className="space-y-2 flex-1">
-          <div className="h-5 w-44 rounded skeleton-shimmer" />
-          <div className="h-3 w-28 rounded skeleton-shimmer" />
-        </div>
-      </div>
-      <div className="premium-surface rounded-2xl p-6 space-y-4">
-        <div className="h-4 w-40 rounded skeleton-shimmer" />
-        <div className="h-11 rounded-xl skeleton-shimmer" />
-        <div className="h-11 rounded-xl skeleton-shimmer" />
-        <div className="h-11 rounded-xl skeleton-shimmer" />
-      </div>
-    </div>
-  );
-}
-
+const ALLOWED = [
+  "pdf",
+  "png",
+  "jpg",
+  "jpeg",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "csv",
+  "txt",
+];
 export default function TicketForm() {
   const { categoryId } = useParams();
   const navigate = useNavigate();
-  const reduceMotion = useReducedMotion();
   const [category, setCategory] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const [loadError, setLoadError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [requester, setRequester] = useState({ matricula: "", email: "", empresa: "" });
+  const [error, setError] = useState("");
+  const [requester, setRequester] = useState({
+    matricula: "",
+    email: "",
+    empresa: "",
+  });
   const [values, setValues] = useState({});
   const [file, setFile] = useState(null);
   const [dragging, setDragging] = useState(false);
-  const [errors, setErrors] = useState({});
   const [success, setSuccess] = useState(null);
-
-  const loadCategory = () => {
+  const submitLock = useRef(false);
+  const [downloading, setDownloading] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController();
     setLoading(true);
-    setLoadFailed(false);
+    setLoadError("");
+    setCategory(null);
+    setSuccess(null);
+    setFile(null);
+    setValues({});
+    setError("");
     api
-      .get(`/categories/${categoryId}`)
+      .get(`/categories/${categoryId}`, { signal: controller.signal })
       .then(({ data }) => {
         setCategory(data);
         const init = {};
-        (data.fields || []).forEach((f) => { init[f.id] = f.type === "checkbox" ? false : ""; });
+        (data.fields || []).forEach((f) => {
+          init[f.id] = f.type === "checkbox" ? false : "";
+        });
         setValues(init);
       })
-      .catch(() => setLoadFailed(true))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => { loadCategory(); }, [categoryId]);
-
-  const setRequesterValue = (key, value) => {
-    setRequester((current) => ({ ...current, [key]: value }));
-    setErrors((current) => ({ ...current, [`requester.${key}`]: "" }));
-  };
-
-  const setValue = (id, value) => {
-    setValues((current) => ({ ...current, [id]: value }));
-    setErrors((current) => ({ ...current, [`field.${id}`]: "" }));
-  };
-
-  const fileMeta = useMemo(() => {
-    if (!file) return null;
-    return {
-      name: file.name,
-      size: file.size < 1024 * 1024 ? `${Math.ceil(file.size / 1024)} KB` : `${(file.size / 1024 / 1024).toFixed(1)} MB`,
-    };
-  }, [file]);
-
-  const validateFile = (candidate) => {
-    if (!candidate) return;
-    if (candidate.size > MAX_FILE_BYTES) {
-      toast.error("O arquivo ultrapassa o limite de 10MB");
-      return;
-    }
-    const ext = candidate.name.includes(".") ? `.${candidate.name.split(".").pop().toLowerCase()}` : "";
-    if (!ACCEPTED_FILE_EXTENSIONS.split(",").includes(ext)) {
-      toast.error("Tipo de arquivo não permitido");
-      return;
-    }
-    setFile(candidate);
-  };
-
-  const validate = () => {
-    const next = {};
-    if (!requester.matricula.trim()) next["requester.matricula"] = "Informe sua matrícula";
-    if (!requester.empresa.trim()) next["requester.empresa"] = "Informe a empresa ou departamento";
-    if (!requester.email.trim()) next["requester.email"] = "Informe seu e-mail";
-    else if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(requester.email.trim())) next["requester.email"] = "Digite um e-mail válido";
-
-    for (const field of category?.fields || []) {
-      if (!field.required) continue;
-      const val = values[field.id];
-      const missing = field.type === "checkbox" ? val !== true : !String(val || "").trim();
-      if (missing) next[`field.${field.id}`] = "Este campo é obrigatório";
-    }
-    setErrors(next);
-    const valid = Object.keys(next).length === 0;
-    if (!valid) {
-      requestAnimationFrame(() => {
-        document.querySelector('[aria-invalid="true"]')?.focus();
+      .catch((e) => {
+        if (e.code !== "ERR_CANCELED")
+          setLoadError(
+            e.response?.status === 404
+              ? "Este serviço não está disponível no momento."
+              : "Não foi possível carregar o formulário. Tente novamente.",
+          );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
       });
+    return () => controller.abort();
+  }, [categoryId, retry]);
+  const requiredFields = useMemo(
+    () => (category?.fields || []).filter((f) => f.required),
+    [category],
+  );
+  const needsTemplate = (category?.template_columns || []).length > 0;
+  const complete = (value, type) =>
+    type === "checkbox" ? value === true : String(value ?? "").trim() !== "";
+  const total = 3 + requiredFields.length + (needsTemplate ? 1 : 0);
+  const completed =
+    Object.values(requester).filter((v) => v.trim()).length +
+    requiredFields.filter((f) => complete(values[f.id], f.type)).length +
+    (needsTemplate && file ? 1 : 0);
+  const progress = Math.round((completed / total) * 100);
+  const setValue = (id, v) => setValues((p) => ({ ...p, [id]: v }));
+  const chooseFile = (f) => {
+    if (!f) return;
+    if (!f.size) {
+      toast.error("O arquivo está vazio.");
+      return;
     }
-    return valid;
+    if (f.size > 10 * 1024 * 1024) {
+      toast.error("O arquivo deve ter no máximo 10 MB.");
+      return;
+    }
+    const ext = f.name.split(".").pop().toLowerCase();
+    if (!ALLOWED.includes(ext)) {
+      toast.error(
+        "Formato não aceito. Use PDF, imagem, Word, Excel, CSV ou TXT.",
+      );
+      return;
+    }
+    if (needsTemplate && ext !== "xlsx") {
+      toast.error("Anexe a planilha modelo preenchida no formato XLSX.");
+      return;
+    }
+    setFile(f);
   };
-
   const downloadTemplate = async () => {
+    setDownloading(true);
     try {
-      const resp = await api.get(`/categories/${category.id}/template`, { responseType: "blob" });
-      const url = URL.createObjectURL(resp.data);
+      const { data } = await api.get(`/categories/${category.id}/template`, {
+        responseType: "blob",
+      });
+      const url = URL.createObjectURL(data);
       const a = document.createElement("a");
       a.href = url;
-      a.download = category.template_filename || `modelo-${category.name}.xlsx`;
+      a.download = category.template_filename || "modelo.xlsx";
       a.click();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
-      toast.error("Não foi possível baixar o modelo");
+      toast.error("Não foi possível baixar o modelo.");
+    } finally {
+      setDownloading(false);
     }
   };
-
-  const copyTicketCode = async () => {
-    try {
-      await navigator.clipboard.writeText(success.ticket_number);
-      toast.success("Código copiado");
-    } catch {
-      const input = document.createElement("textarea");
-      input.value = success.ticket_number;
-      input.setAttribute("readonly", "");
-      input.style.position = "fixed";
-      input.style.opacity = "0";
-      document.body.appendChild(input);
-      input.select();
-      const copied = document.execCommand("copy");
-      document.body.removeChild(input);
-      copied ? toast.success("Código copiado") : toast.error("Não foi possível copiar o código");
-    }
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (submitting || !validate()) return;
-
+    if (submitLock.current) return;
+    setError("");
+    if (needsTemplate && !file) {
+      setError("Anexe a planilha modelo preenchida para enviar este chamado.");
+      return;
+    }
+    const missing = requiredFields.find((f) => !complete(values[f.id], f.type));
+    if (missing) {
+      setError(`Preencha o campo obrigatório: ${missing.label}`);
+      return;
+    }
+    submitLock.current = true;
     setSubmitting(true);
     try {
       const fieldValues = {};
-      (category.fields || []).forEach((f) => { fieldValues[f.label] = values[f.id]; });
-      const payload = {
-        category_id: category.id,
-        requester: {
-          matricula: requester.matricula.trim(),
-          email: requester.email.trim().toLowerCase(),
-          empresa: requester.empresa.trim(),
-        },
-        field_values: fieldValues,
-      };
+      (category.fields || []).forEach((f) => {
+        fieldValues[f.label] = values[f.id];
+      });
       const form = new FormData();
-      form.append("payload", JSON.stringify(payload));
+      form.append(
+        "payload",
+        JSON.stringify({
+          category_id: category.id,
+          requester: Object.fromEntries(
+            Object.entries(requester).map(([k, v]) => [k, v.trim()]),
+          ),
+          field_values: fieldValues,
+        }),
+      );
       if (file) form.append("file", file);
       const { data } = await api.post("/tickets", form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setSuccess(data);
-      window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
+      window.scrollTo({ top: 0, behavior: "instant" });
     } catch (err) {
-      toast.error(formatApiErrorDetail(err.response?.data?.detail));
+      setError(
+        err.response
+          ? formatApiErrorDetail(err.response.data?.detail)
+          : "Não recebemos a confirmação do servidor. Antes de reenviar, consulte seus chamados pelo e-mail para evitar uma duplicação.",
+      );
     } finally {
+      submitLock.current = false;
       setSubmitting(false);
     }
   };
-
-  if (loading) {
+  const copyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(success.ticket_number);
+      toast.success("Protocolo copiado!");
+    } catch {
+      toast.error("Não foi possível copiar. Selecione o protocolo na tela.");
+    }
+  };
+  if (loading)
     return (
-      <div className="min-h-screen grain-bg">
+      <>
         <SiteHeader />
-        <FormSkeleton />
-      </div>
+        <PageLoading />
+      </>
     );
-  }
-
-  if (loadFailed || !category) {
+  if (!category)
     return (
-      <div className="min-h-screen grain-bg">
+      <>
         <SiteHeader />
-        <main className="max-w-lg mx-auto px-4 py-16 text-center">
-          <div className="premium-surface rounded-3xl p-8">
-            <div className="w-12 h-12 rounded-2xl bg-rose-50 flex items-center justify-center mx-auto mb-4">
-              <AlertCircle className="w-5 h-5 text-rose-500" />
-            </div>
-            <h1 className="font-display text-xl font-bold text-slate-900">Não foi possível abrir esta categoria</h1>
-            <p className="text-sm text-slate-500 mt-2">Ela pode ter sido desativada ou a conexão pode ter oscilado.</p>
-            <div className="flex flex-col sm:flex-row gap-2 mt-5 justify-center">
-              <Button variant="outline" onClick={() => navigate("/")} className="border-purple-200 text-purple-700">Voltar ao início</Button>
-              <Button onClick={loadCategory} className="bg-[#660099] hover:bg-[#520080] gap-2"><RotateCw className="w-4 h-4" /> Tentar novamente</Button>
-            </div>
+        <main id="main-content" className="shell content-page">
+          <Link className="back-link" to="/">
+            <ArrowLeft size={16} /> Voltar aos serviços
+          </Link>
+          <div className="mt-8">
+            <EmptyState
+              title="Serviço indisponível"
+              onRetry={() => setRetry((r) => r + 1)}
+            >
+              {loadError}
+            </EmptyState>
           </div>
         </main>
-      </div>
+      </>
     );
-  }
-
-  if (success) {
+  if (success)
     return (
-      <div className="min-h-screen grain-bg">
+      <>
         <SiteHeader />
-        <main className="max-w-lg mx-auto px-4 py-12 sm:py-16">
-          <motion.div
-            initial={reduceMotion ? false : { opacity: 0, scale: .98, y: 8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            transition={{ duration: reduceMotion ? 0 : .32 }}
-            className="premium-surface rounded-3xl p-7 sm:p-8 text-center"
-          >
-            <motion.div
-              initial={reduceMotion ? false : { scale: .8 }}
-              animate={{ scale: 1 }}
-              transition={{ type: "spring", stiffness: 320, damping: 22 }}
-              className="w-16 h-16 rounded-2xl bg-emerald-100 flex items-center justify-center mx-auto mb-5"
-            >
-              <CheckCircle2 className="w-9 h-9 text-emerald-600" />
-            </motion.div>
-            <h2 className="font-display text-2xl font-extrabold text-slate-950">Chamado aberto com sucesso</h2>
-            <p className="mt-2 text-sm text-slate-500 leading-relaxed">Sua solicitação foi registrada. Guarde o código abaixo para acompanhar o andamento.</p>
-
-            <div className="mt-6 bg-purple-50 rounded-2xl p-5 border border-purple-100">
-              <p className="text-[11px] font-bold uppercase tracking-[.14em] text-purple-600">Número do chamado</p>
-              <p data-testid="ticket-success-number" className="font-mono text-2xl font-bold text-slate-950 mt-1">{success.ticket_number}</p>
-              <div className="flex items-center justify-center gap-1.5 mt-3 text-sm text-slate-600">
-                <Clock className="w-4 h-4 text-purple-500" />
-                <span data-testid="ticket-success-lead-time">Prazo estimado: <strong>{success.lead_time_hours} horas</strong></span>
+        <main id="main-content" className="shell content-page">
+          <Reveal className="surface success-surface">
+            <span className="success-icon">
+              <CheckCircle2 size={32} />
+            </span>
+            <p className="eyebrow" style={{ justifyContent: "center" }}>
+              PRIMEIRO PASSO CONCLUÍDO
+            </p>
+            <h1>Seu chamado está a caminho.</h1>
+            <p>
+              Sua solicitação foi registrada. Guarde o protocolo para acompanhar
+              o atendimento por aqui.
+            </p>
+            <div className="protocol-box">
+              <p className="eyebrow">NÚMERO DO CHAMADO</p>
+              <div
+                className="protocol-number"
+                data-testid="ticket-success-number"
+              >
+                {success.ticket_number}
               </div>
+              <small data-testid="ticket-success-lead-time">
+                Prazo estimado: {success.lead_time_hours} horas
+                <br />
+                Previsão: {fmt(success.due_at)}
+              </small>
             </div>
-
-            <div className="mt-6 flex flex-col sm:flex-row gap-2.5">
-              <Button
-                variant="outline"
+            <div className="success-actions">
+              <button
+                className="button button-secondary"
+                onClick={copyCode}
                 data-testid="copy-ticket-button"
-                onClick={copyTicketCode}
-                className="flex-1 border-purple-200 text-purple-700 hover:bg-purple-50 gap-2"
               >
-                <Copy className="w-4 h-4" /> Copiar código
-              </Button>
-              <Button
+                <Copy size={15} /> Copiar protocolo
+              </button>
+              <button
+                className="button button-primary"
+                onClick={() =>
+                  navigate(
+                    `/acompanhar?q=${encodeURIComponent(success.ticket_number)}`,
+                  )
+                }
                 data-testid="track-success-button"
-                onClick={() => navigate(`/acompanhar?q=${success.ticket_number}`)}
-                className="flex-1 bg-[#660099] hover:bg-[#520080]"
               >
-                Acompanhar status
-              </Button>
+                Acompanhar <ArrowUpRight size={16} />
+              </button>
             </div>
-            <button data-testid="new-ticket-button" onClick={() => navigate("/")} className="mt-5 text-sm text-slate-400 hover:text-purple-700 transition-colors rounded-lg">
+            <Link className="back-link" data-testid="new-ticket-button" to="/">
               Abrir outro chamado
-            </button>
-          </motion.div>
+            </Link>
+          </Reveal>
         </main>
-      </div>
+        <SiteFooter />
+      </>
     );
-  }
-
   return (
-    <div className="min-h-screen grain-bg">
+    <div className="grain-bg">
       <SiteHeader />
-      <main className="max-w-2xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
-        <button data-testid="back-button" onClick={() => navigate("/")} className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-purple-700 transition-colors mb-6 rounded-lg">
-          <ArrowLeft className="w-4 h-4" /> Voltar às categorias
-        </button>
-
-        <motion.div variants={stagger} initial={reduceMotion ? false : "hidden"} animate="show">
-          <motion.div variants={fadeUp} className="flex items-center gap-3 mb-7">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#660099] to-[#9b26b6] flex items-center justify-center shadow-lg shadow-purple-500/20 shrink-0">
-              <CategoryIcon name={category.icon} className="w-6 h-6 text-white" />
-            </div>
-            <div className="min-w-0">
-              <h1 className="font-display text-xl sm:text-2xl font-extrabold text-slate-950 truncate">{category.name}</h1>
-              <p className="text-sm text-slate-500 flex items-center gap-1.5 mt-0.5">
-                <Clock className="w-3.5 h-3.5 text-purple-500" /> Prazo estimado: {category.lead_time_hours}h
-              </p>
-            </div>
-          </motion.div>
-
-          <form onSubmit={handleSubmit} noValidate className="space-y-5 sm:space-y-6">
-            <motion.section variants={fadeUp} className="premium-surface rounded-2xl p-5 sm:p-6">
-              <div className="flex items-center gap-2 mb-5">
-                <div className="w-8 h-8 rounded-xl bg-purple-50 flex items-center justify-center"><UserRound className="w-4 h-4 text-purple-600" /></div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900">Identificação</p>
-                  <p className="text-xs text-slate-400">Dados para localizar e acompanhar a solicitação.</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="requester-matricula" className="text-slate-700">Matrícula *</Label>
-                  <Input
-                    id="requester-matricula"
+      <main id="main-content" className="shell content-page">
+        <Link to="/#servicos" className="back-link" data-testid="back-button">
+          <ArrowLeft size={15} /> Voltar aos serviços
+        </Link>
+        <Reveal className="page-heading">
+          <p className="eyebrow">VAMOS RESOLVER ISSO, JUNTOS</p>
+          <h1>{category.name}</h1>
+          <p>{category.description}</p>
+        </Reveal>
+        <div className="form-layout">
+          <form className="form-sections" onSubmit={handleSubmit}>
+            <Reveal className="surface">
+              <h2 className="surface-title">
+                <span>01</span> Primeiro, vamos conhecer você.
+              </h2>
+              <div className="form-grid">
+                <div className="form-field">
+                  <label htmlFor="matricula">
+                    Matrícula <em>*</em>
+                  </label>
+                  <input
+                    id="matricula"
                     data-testid="requester-matricula-input"
                     value={requester.matricula}
+                    onChange={(e) =>
+                      setRequester({ ...requester, matricula: e.target.value })
+                    }
+                    placeholder="Ex.: 001234"
+                    required
                     maxLength={80}
-                    onChange={(e) => setRequesterValue("matricula", e.target.value)}
-                    placeholder="Ex: 001234"
-                    aria-invalid={!!errors["requester.matricula"]}
-                    className={`mt-1.5 bg-white ${errors["requester.matricula"] ? "border-rose-400 focus-visible:ring-rose-200" : "border-purple-100"}`}
                   />
-                  <FieldError>{errors["requester.matricula"]}</FieldError>
                 </div>
-
-                <div>
-                  <Label htmlFor="requester-empresa" className="text-slate-700">Empresa / Departamento *</Label>
-                  <Input
-                    id="requester-empresa"
+                <div className="form-field">
+                  <label htmlFor="empresa">
+                    Empresa / Departamento <em>*</em>
+                  </label>
+                  <input
+                    id="empresa"
                     data-testid="requester-empresa-input"
                     value={requester.empresa}
+                    onChange={(e) =>
+                      setRequester({ ...requester, empresa: e.target.value })
+                    }
+                    placeholder="Ex.: Matriz · Financeiro"
+                    required
                     maxLength={160}
-                    onChange={(e) => setRequesterValue("empresa", e.target.value)}
-                    placeholder="Ex: Matriz - Financeiro"
-                    aria-invalid={!!errors["requester.empresa"]}
-                    className={`mt-1.5 bg-white ${errors["requester.empresa"] ? "border-rose-400" : "border-purple-100"}`}
                   />
-                  <FieldError>{errors["requester.empresa"]}</FieldError>
                 </div>
-
-                <div className="sm:col-span-2">
-                  <Label htmlFor="requester-email" className="text-slate-700">E-mail corporativo *</Label>
-                  <Input
-                    id="requester-email"
+                <div className="form-field field-full">
+                  <label htmlFor="email">
+                    E-mail corporativo <em>*</em>
+                  </label>
+                  <input
+                    id="email"
                     data-testid="requester-email-input"
                     type="email"
                     autoComplete="email"
                     value={requester.email}
-                    maxLength={254}
-                    onChange={(e) => setRequesterValue("email", e.target.value)}
+                    onChange={(e) =>
+                      setRequester({ ...requester, email: e.target.value })
+                    }
                     placeholder="voce@empresa.com.br"
-                    aria-invalid={!!errors["requester.email"]}
-                    className={`mt-1.5 bg-white ${errors["requester.email"] ? "border-rose-400" : "border-purple-100"}`}
+                    required
+                    maxLength={254}
                   />
-                  <FieldError>{errors["requester.email"]}</FieldError>
                 </div>
               </div>
-            </motion.section>
-
-            <motion.section variants={fadeUp} className="premium-surface rounded-2xl p-5 sm:p-6">
-              <div className="flex items-center gap-2 mb-5">
-                <div className="w-8 h-8 rounded-xl bg-purple-50 flex items-center justify-center"><ClipboardList className="w-4 h-4 text-purple-600" /></div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900">Detalhes da solicitação</p>
-                  <p className="text-xs text-slate-400">Preencha somente o que é relevante para esta categoria.</p>
-                </div>
-              </div>
-
-              <div className="space-y-5">
-                {(category.fields || []).map((f) => {
-                  const fieldError = errors[`field.${f.id}`];
-                  return (
-                    <div key={f.id}>
-                      {f.type !== "checkbox" && (
-                        <Label className="text-slate-700">{f.label} {f.required && <span className="text-rose-500">*</span>}</Label>
-                      )}
-
-                      {f.type === "text" && <Input data-testid={`field-${f.id}`} maxLength={10000} value={values[f.id] || ""} onChange={(e) => setValue(f.id, e.target.value)} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`} />}
-                      {f.type === "number" && <Input data-testid={`field-${f.id}`} type="number" value={values[f.id] || ""} onChange={(e) => setValue(f.id, e.target.value)} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`} />}
-                      {f.type === "date" && <Input data-testid={`field-${f.id}`} type="date" value={values[f.id] || ""} onChange={(e) => setValue(f.id, e.target.value)} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`} />}
-                      {f.type === "textarea" && <Textarea data-testid={`field-${f.id}`} maxLength={10000} value={values[f.id] || ""} onChange={(e) => setValue(f.id, e.target.value)} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`} rows={4} />}
-                      {f.type === "select" && (
-                        <Select value={values[f.id] || ""} onValueChange={(v) => setValue(f.id, v)}>
-                          <SelectTrigger data-testid={`field-${f.id}`} aria-invalid={!!fieldError} className={`mt-1.5 bg-white ${fieldError ? "border-rose-400" : "border-purple-100"}`}>
-                            <SelectValue placeholder="Selecione..." />
-                          </SelectTrigger>
-                          <SelectContent>{(f.options || []).map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
-                        </Select>
-                      )}
-                      {f.type === "checkbox" && (
-                        <label className={`flex items-start gap-2.5 cursor-pointer rounded-xl p-3 border ${fieldError ? "border-rose-200 bg-rose-50" : "border-transparent hover:bg-purple-50"} transition-colors`}>
-                          <Checkbox data-testid={`field-${f.id}`} checked={!!values[f.id]} onCheckedChange={(v) => setValue(f.id, !!v)} />
-                          <span className="text-sm text-slate-700">{f.label} {f.required && <span className="text-rose-500">*</span>}</span>
-                        </label>
-                      )}
-                      <FieldError>{fieldError}</FieldError>
-                    </div>
-                  );
-                })}
-
-                {(category.template_columns || []).length > 0 && (
-                  <div data-testid="template-download-box" className="bg-amber-50/80 border border-amber-200 rounded-2xl p-4">
-                    <p className="text-sm font-semibold text-amber-900 flex items-center gap-2"><FileSpreadsheet className="w-4 h-4" /> Modelo padrão</p>
-                    <p className="text-xs text-amber-700 mt-1 leading-relaxed">Baixe a planilha, preencha as colunas exigidas e anexe o arquivo preenchido.</p>
-                    <Button type="button" data-testid="download-template-button" onClick={downloadTemplate} variant="outline" className="mt-3 border-amber-300 text-amber-900 hover:bg-amber-100 gap-2 h-9">
-                      <Download className="w-4 h-4" /> Baixar modelo Excel
-                    </Button>
+            </Reveal>
+            <Reveal className="surface">
+              <h2 className="surface-title">
+                <span>02</span> Conte o que você precisa.
+              </h2>
+              <div className="field-stack">
+                {(category.fields || []).map((f) => (
+                  <div key={f.id} className="form-field">
+                    {f.type !== "checkbox" && (
+                      <label htmlFor={`field-${f.id}`}>
+                        {f.label} {f.required && <em>*</em>}
+                      </label>
+                    )}
+                    {["text", "number", "date"].includes(f.type) && (
+                      <input
+                        id={`field-${f.id}`}
+                        data-testid={`field-${f.id}`}
+                        type={f.type}
+                        value={values[f.id] ?? ""}
+                        onChange={(e) => setValue(f.id, e.target.value)}
+                        required={f.required}
+                        maxLength={f.type === "text" ? 5000 : undefined}
+                        step={f.type === "number" ? "any" : undefined}
+                      />
+                    )}{" "}
+                    {f.type === "textarea" && (
+                      <textarea
+                        id={`field-${f.id}`}
+                        data-testid={`field-${f.id}`}
+                        value={values[f.id] ?? ""}
+                        onChange={(e) => setValue(f.id, e.target.value)}
+                        required={f.required}
+                        rows={4}
+                        maxLength={10000}
+                        placeholder="Quanto mais detalhes, melhor podemos ajudar."
+                      />
+                    )}
+                    {f.type === "select" && (
+                      <select
+                        id={`field-${f.id}`}
+                        data-testid={`field-${f.id}`}
+                        value={values[f.id] ?? ""}
+                        onChange={(e) => setValue(f.id, e.target.value)}
+                        required={f.required}
+                      >
+                        <option value="">Selecione uma opção</option>
+                        {(f.options || []).map((o) => (
+                          <option key={o} value={o}>
+                            {o}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {f.type === "checkbox" && (
+                      <label
+                        className="checkbox-field"
+                        htmlFor={`field-${f.id}`}
+                      >
+                        <input
+                          id={`field-${f.id}`}
+                          data-testid={`field-${f.id}`}
+                          type="checkbox"
+                          checked={!!values[f.id]}
+                          onChange={(e) => setValue(f.id, e.target.checked)}
+                          required={f.required}
+                        />
+                        {f.label} {f.required && <em>*</em>}
+                      </label>
+                    )}
+                  </div>
+                ))}
+                {needsTemplate && (
+                  <div
+                    className="template-box"
+                    data-testid="template-download-box"
+                  >
+                    <strong>Preencha a planilha modelo</strong>
+                    <p>
+                      Baixe o Excel e preencha:{" "}
+                      {category.template_columns.join(", ")}. Anexe o modelo
+                      preenchido para enviar sua solicitação.
+                    </p>
+                    <button
+                      className="button button-secondary"
+                      type="button"
+                      onClick={downloadTemplate}
+                      disabled={downloading}
+                      data-testid="download-template-button"
+                    >
+                      {downloading ? (
+                        <Loader2 className="animate-spin" size={15} />
+                      ) : (
+                        <Download size={15} />
+                      )}{" "}
+                      Baixar modelo Excel
+                    </button>
                   </div>
                 )}
-
-                <div>
-                  <Label className="text-slate-700">Anexo <span className="text-slate-400 font-normal">(opcional)</span></Label>
+                <div className="form-field">
+                  <label htmlFor="attachment">
+                    Anexo{" "}
+                    {needsTemplate ? (
+                      <em>*</em>
+                    ) : (
+                      <span className="field-hint">· opcional</span>
+                    )}
+                  </label>
                   {file ? (
-                    <div data-testid="file-selected" className="mt-1.5 flex items-center justify-between gap-3 bg-purple-50 border border-purple-100 rounded-xl px-4 py-3">
-                      <span className="flex items-center gap-2 text-sm text-slate-700 min-w-0">
-                        <FileText className="w-4 h-4 text-purple-600 shrink-0" />
-                        <span className="min-w-0">
-                          <span className="block truncate font-medium">{fileMeta.name}</span>
-                          <span className="block text-[11px] text-slate-400 mt-0.5">{fileMeta.size}</span>
-                        </span>
+                    <div className="file-selected" data-testid="file-selected">
+                      <FileText size={20} />
+                      <span>
+                        {file.name}
+                        <small className="block field-hint">
+                          {(file.size / 1024).toFixed(0)} KB
+                        </small>
                       </span>
-                      <button type="button" aria-label="Remover arquivo" data-testid="remove-file-button" onClick={() => setFile(null)} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors shrink-0">
-                        <X className="w-4 h-4" />
+                      <button
+                        type="button"
+                        className="icon-button"
+                        onClick={() => setFile(null)}
+                        aria-label="Remover anexo"
+                        data-testid="remove-file-button"
+                      >
+                        <X size={16} />
                       </button>
                     </div>
                   ) : (
-                    <label
+                    <div
+                      className={`upload-zone ${dragging ? "dragging" : ""}`}
                       data-testid="ticket-file-upload-zone"
-                      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setDragging(true);
+                      }}
                       onDragLeave={() => setDragging(false)}
                       onDrop={(e) => {
                         e.preventDefault();
                         setDragging(false);
-                        validateFile(e.dataTransfer.files?.[0]);
+                        chooseFile(e.dataTransfer.files[0]);
                       }}
-                      className={`mt-1.5 flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-6 text-center transition-colors cursor-pointer ${dragging ? "border-purple-500 bg-purple-100" : "border-purple-200 hover:border-purple-400 bg-purple-50/50"}`}
                     >
-                      <UploadCloud className="w-7 h-7 text-purple-500 mb-2" />
-                      <span className="text-sm text-slate-700 font-medium">Clique ou arraste um arquivo</span>
-                      <span className="text-xs text-slate-400 mt-1">PDF, imagem, Office, CSV ou TXT · até 10MB</span>
-                      <input type="file" accept={ACCEPTED_FILE_EXTENSIONS} className="hidden" onChange={(e) => validateFile(e.target.files?.[0])} />
-                    </label>
+                      <UploadCloud size={28} />
+                      <div>
+                        <strong>
+                          Arraste um arquivo ou clique para anexar
+                        </strong>
+                        <small>
+                          {needsTemplate
+                            ? "Excel (XLSX)"
+                            : "PDF, imagem, Word, Excel, CSV ou TXT"}{" "}
+                          · Até 10 MB
+                        </small>
+                      </div>
+                      <input
+                        id="attachment"
+                        type="file"
+                        aria-label="Anexar arquivo"
+                        accept={
+                          needsTemplate
+                            ? ".xlsx"
+                            : ALLOWED.map((x) => `.${x}`).join(",")
+                        }
+                        onChange={(e) => {
+                          chooseFile(e.target.files?.[0]);
+                          e.target.value = "";
+                        }}
+                      />
+                    </div>
                   )}
                 </div>
               </div>
-            </motion.section>
-
-            <motion.div variants={fadeUp}>
-              <Button
-                type="submit"
-                data-testid="submit-ticket-button"
-                disabled={submitting}
-                className="w-full h-12 bg-[#660099] hover:bg-[#520080] text-base font-semibold gap-2 shadow-lg shadow-purple-500/20"
-              >
-                {submitting ? <><Loader2 className="w-5 h-5 animate-spin" /> Enviando...</> : "Enviar chamado"}
-              </Button>
-              <p className="text-center text-[11px] text-slate-400 mt-2">Evite clicar novamente durante o envio. O botão fica bloqueado até a conclusão.</p>
-            </motion.div>
+            </Reveal>
+            {error && (
+              <div className="error-banner" role="alert">
+                <AlertCircle size={17} />
+                {error}
+              </div>
+            )}
+            <button
+              className="button button-primary form-submit"
+              type="submit"
+              disabled={submitting}
+              data-testid="submit-ticket-button"
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="animate-spin" size={17} /> Enviando sua
+                  solicitação…
+                </>
+              ) : (
+                <>
+                  Enviar chamado <Send size={16} />
+                </>
+              )}
+            </button>
+            <p className="form-footnote">
+              Os campos com * são obrigatórios.
+              <br />
+              Revise suas informações antes de enviar.
+            </p>
           </form>
-        </motion.div>
+          <aside className="form-aside">
+            <span className="service-icon">
+              <CategoryIcon name={category.icon} />
+            </span>
+            <p className="eyebrow">PRAZO ESTIMADO</p>
+            <div className="sla-time">
+              {category.lead_time_hours}
+              <small>horas</small>
+            </div>
+            <h3>Transparência em cada etapa.</h3>
+            <p>
+              Após o envio, seu protocolo fica disponível para consultar o
+              andamento da solicitação.
+            </p>
+            <div
+              className="form-progress"
+              role="progressbar"
+              aria-label="Preenchimento obrigatório"
+              aria-valuenow={progress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <span style={{ width: `${progress}%` }} />
+            </div>
+            <div className="form-progress-label">
+              <span>Preenchimento</span>
+              <span>{progress}%</span>
+            </div>
+            <p className="aside-note">
+              <ShieldCheck size={15} className="mb-2" />
+              As informações do formulário ficam disponíveis à equipe
+              responsável.
+            </p>
+          </aside>
+        </div>
       </main>
+      <SiteFooter />
     </div>
   );
 }

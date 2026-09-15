@@ -1,92 +1,130 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap');
-
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
 @layer base {
   :root {
-    --background: 255 100% 99%;
-    --foreground: 224 38% 12%;
-    --card: 0 0% 100%;
-    --card-foreground: 224 38% 12%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 224 38% 12%;
-    --primary: 276 100% 30%;
+    --background: 230 23% 5%;
+    --foreground: 228 20% 94%;
+    --card: 228 21% 9%;
+    --card-foreground: 228 20% 94%;
+    --popover: 228 19% 11%;
+    --popover-foreground: 228 20% 94%;
+    --primary: 263 82% 66%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 270 55% 96%;
-    --secondary-foreground: 270 65% 28%;
-    --muted: 240 20% 96%;
-    --muted-foreground: 220 12% 45%;
-    --accent: 270 65% 96%;
-    --accent-foreground: 270 65% 28%;
-    --destructive: 0 78% 55%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 260 28% 90%;
-    --input: 260 28% 90%;
-    --ring: 276 100% 30%;
-    --radius: 1rem;
-    --surface-shadow: 0 1px 2px rgba(31, 19, 50, .04), 0 12px 34px rgba(70, 27, 102, .06);
-    --surface-shadow-hover: 0 16px 45px rgba(70, 27, 102, .12);
+    --secondary: 229 18% 14%;
+    --secondary-foreground: 228 20% 90%;
+    --muted: 229 18% 14%;
+    --muted-foreground: 226 12% 65%;
+    --accent: 250 22% 17%;
+    --accent-foreground: 260 80% 85%;
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 228 16% 18%;
+    --input: 228 16% 22%;
+    --ring: 263 82% 66%;
+    --radius: 0.8rem;
   }
-
-  * { @apply border-border; }
-  html { scroll-behavior: smooth; }
+  * {
+    @apply border-border;
+  }
   body {
-    margin: 0;
-    min-width: 320px;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
     @apply bg-background text-foreground;
-    background-image:
-      radial-gradient(circle at 8% -10%, rgba(102,0,153,.09), transparent 28rem),
-      radial-gradient(circle at 95% 5%, rgba(154,61,198,.07), transparent 24rem);
-    background-attachment: fixed;
+    margin: 0;
+    font-family: "Inter", sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  h1, h2, h3, h4, .font-display { font-family: 'Plus Jakarta Sans', sans-serif; }
-  button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
-  :focus-visible { outline: 3px solid rgba(102,0,153,.24); outline-offset: 3px; }
+  h1,
+  h2,
+  h3,
+  h4,
+  .font-display {
+    font-family: "Plus Jakarta Sans", sans-serif;
+  }
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+  button,
+  a,
+  input,
+  textarea,
+  select,
+  summary {
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
+  :focus-visible {
+    outline: 2px solid #c4b5fd;
+    outline-offset: 4px;
+  }
+  input,
+  textarea,
+  select {
+    color-scheme: dark;
+  }
 }
-
-.font-mono { font-family: 'JetBrains Mono', monospace; }
-::selection { background: #ddd6fe; color: #4c1d95; }
-
-@layer components {
-  .premium-surface {
-    @apply bg-white/90 border border-purple-100/80;
-    box-shadow: var(--surface-shadow);
-    backdrop-filter: saturate(140%) blur(12px);
-  }
-  .premium-card {
-    @apply premium-surface rounded-2xl transition-[transform,box-shadow,border-color] duration-300;
-  }
-  @media (hover:hover) {
-    .premium-card:hover { transform: translateY(-2px); box-shadow: var(--surface-shadow-hover); border-color: rgba(126,34,206,.20); }
-  }
-  .interactive-press { @apply transition-transform duration-150 active:scale-[.98]; }
-  .soft-divider { @apply border-purple-100/70; }
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 110px;
 }
-
+::selection {
+  background: #7c3aed;
+  color: white;
+}
+.font-mono {
+  font-family: "JetBrains Mono", monospace;
+}
 .grain-bg {
-  background-image: radial-gradient(circle at 1px 1px, rgba(102,0,153,.075) 1px, transparent 0);
-  background-size: 24px 24px;
+  background:
+    radial-gradient(
+      ellipse at 50% 0,
+      rgba(110, 65, 195, 0.08),
+      transparent 55%
+    ),
+    #090a0f;
 }
-
-@keyframes fade-up { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes pop-in { 0% { opacity: 0; transform: scale(.96); } 100% { opacity: 1; transform: scale(1); } }
-@keyframes shimmer { 100% { transform: translateX(100%); } }
-.animate-fade-up { animation: fade-up .42s cubic-bezier(.16,1,.3,1) both; }
-.animate-pop-in { animation: pop-in .28s cubic-bezier(.16,1,.3,1) both; }
-.skeleton-shimmer { position: relative; overflow: hidden; background: #f1eef5; }
-.skeleton-shimmer::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255,255,255,.72), transparent); animation: shimmer 1.35s infinite; }
-
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-up {
+  animation: fade-up 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-pop-in {
+  animation: pop-in 0.4s ease-out both;
+}
 @media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
-}
-
-@media (max-width: 640px) {
-  body { background-attachment: scroll; }
-  .premium-surface { backdrop-filter: none; }
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

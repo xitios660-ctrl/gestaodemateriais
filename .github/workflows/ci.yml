@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [premium-product-evolution]
+    branches: [main, premium-product-evolution, cinematic-experience]
 
 concurrency:
   group: quality-${{ github.ref }}
@@ -28,6 +28,11 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --non-interactive
+
+      - name: Session regression tests
+        env:
+          CI: "true"
+        run: yarn test --watchAll=false --runInBand
 
       - name: Production build
         env:
@@ -56,10 +61,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: backend/requirements*.txt
 
       - name: Install dependencies
-        run: pip install -r backend/requirements.txt pytest pytest-xdist
+        run: pip install -r backend/requirements-test.txt
 
       - name: Compile backend
         run: python -m py_compile backend/server.py
@@ -72,10 +77,10 @@ jobs:
           MONGO_URL: mongodb://localhost:27017
         run: python -c "import sys; sys.path.insert(0, 'backend'); import server; print(server.app.title)"
 
-      - name: Security helper tests
+      - name: Security and workflow tests
         env:
           JWT_SECRET: ci-only-jwt-secret-that-is-long-enough
           ADMIN_EMAIL: ci-admin@example.com
           ADMIN_PASSWORD: ci-only-admin-password-123
           MONGO_URL: mongodb://localhost:27017
-        run: PYTHONPATH=backend pytest -q backend/tests/test_security_helpers.py
+        run: PYTHONPATH=backend pytest -q backend/tests/test_security_helpers.py backend/tests/test_experience_flows.py

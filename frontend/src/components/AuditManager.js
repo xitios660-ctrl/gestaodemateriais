@@ -104,11 +104,11 @@ export default function AuditManager() {
     <div>
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
         <div>
-          <p className="text-sm font-semibold text-slate-800 flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-purple-600" />
+          <p className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-purple-300" />
             Trilha de auditoria
           </p>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-xs text-muted-foreground mt-1">
             {pagination.total} evento{pagination.total === 1 ? "" : "s"} administrativo{pagination.total === 1 ? "" : "s"} registrado{pagination.total === 1 ? "" : "s"}.
           </p>
         </div>
@@ -117,7 +117,7 @@ export default function AuditManager() {
           variant="outline"
           onClick={() => load(true)}
           disabled={refreshing}
-          className="border-purple-200 text-purple-700 gap-2"
+          className="border-border text-purple-300 gap-2"
         >
           <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
           Atualizar
@@ -128,11 +128,11 @@ export default function AuditManager() {
         <AuditSkeleton />
       ) : items.length === 0 ? (
         <div className="premium-surface rounded-3xl py-14 px-6 text-center">
-          <div className="w-12 h-12 rounded-2xl bg-purple-50 flex items-center justify-center mx-auto mb-4">
-            <Activity className="w-6 h-6 text-purple-600" />
+          <div className="w-12 h-12 rounded-2xl bg-accent flex items-center justify-center mx-auto mb-4">
+            <Activity className="w-6 h-6 text-purple-300" />
           </div>
-          <h3 className="font-display font-bold text-slate-900">Nenhum evento administrativo ainda</h3>
-          <p className="text-sm text-slate-500 mt-1">Alterações de usuários, categorias e status aparecerão aqui.</p>
+          <h3 className="font-display font-bold text-foreground">Nenhum evento administrativo ainda</h3>
+          <p className="text-sm text-muted-foreground mt-1">Alterações de usuários, categorias e status aparecerão aqui.</p>
         </div>
       ) : (
         <>
@@ -140,25 +140,25 @@ export default function AuditManager() {
             variants={stagger}
             initial={reduceMotion ? false : "hidden"}
             animate="show"
-            className="premium-surface rounded-2xl divide-y divide-purple-50 overflow-hidden"
+            className="premium-surface rounded-2xl divide-y divide-border overflow-hidden"
           >
             {items.map((entry) => {
               const Icon = iconFor(entry.entity_type);
               return (
                 <motion.article key={entry.id} variants={fadeUp} className="p-4 sm:p-5 flex items-start gap-3 sm:gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center shrink-0">
-                    <Icon className="w-4 h-4 text-purple-700" />
+                  <div className="w-10 h-10 rounded-xl bg-accent flex items-center justify-center shrink-0">
+                    <Icon className="w-4 h-4 text-purple-300" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-3">
-                      <p className="text-sm font-bold text-slate-900">
+                      <p className="text-sm font-bold text-foreground">
                         {ACTION_LABELS[entry.action] || entry.action}
                       </p>
-                      <time className="text-[11px] text-slate-400 whitespace-nowrap">{fmt(entry.created_at)}</time>
+                      <time className="text-[11px] text-muted-foreground whitespace-nowrap">{fmt(entry.created_at)}</time>
                     </div>
-                    <p className="text-sm text-slate-500 mt-1 break-words">{detailText(entry) || "Sem detalhes adicionais"}</p>
-                    <p className="text-[11px] text-slate-400 mt-1.5">
-                      por <span className="font-medium text-slate-500">{entry.actor_name || entry.actor_email || "Sistema"}</span>
+                    <p className="text-sm text-muted-foreground mt-1 break-words">{detailText(entry) || "Sem detalhes adicionais"}</p>
+                    <p className="text-[11px] text-muted-foreground mt-1.5">
+                      por <span className="font-medium text-muted-foreground">{entry.actor_name || entry.actor_email || "Sistema"}</span>
                     </p>
                   </div>
                 </motion.article>
@@ -168,7 +168,7 @@ export default function AuditManager() {
 
           {pagination.pages > 1 && (
             <div className="mt-4 flex items-center justify-between gap-3">
-              <p className="text-xs text-slate-400">Página {pagination.page} de {pagination.pages}</p>
+              <p className="text-xs text-muted-foreground">Página {pagination.page} de {pagination.pages}</p>
               <div className="flex items-center gap-2">
                 <Button
                   type="button"
@@ -177,7 +177,7 @@ export default function AuditManager() {
                   aria-label="Página anterior"
                   disabled={page <= 1 || loading}
                   onClick={() => setPage((value) => Math.max(1, value - 1))}
-                  className="border-purple-200 text-purple-700"
+                  className="border-border text-purple-300"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </Button>
@@ -188,7 +188,7 @@ export default function AuditManager() {
                   aria-label="Próxima página"
                   disabled={page >= pagination.pages || loading}
                   onClick={() => setPage((value) => Math.min(pagination.pages, value + 1))}
-                  className="border-purple-200 text-purple-700"
+                  className="border-border text-purple-300"
                 >
                   <ChevronRight className="w-4 h-4" />
                 </Button>

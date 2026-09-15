@@ -1,36 +1,440 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { motion, useReducedMotion, useScroll, useTransform } from "framer-motion";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
+import {
+  motion,
+  useScroll,
+  useTransform,
+  useReducedMotion,
+} from "framer-motion";
 import { api } from "@/lib/api";
 import { CategoryIcon } from "@/lib/ui";
-import { fadeUp, stagger, tap } from "@/lib/motion";
 import { SiteHeader } from "@/components/SiteHeader";
-import { Clock, ArrowRight, Sparkles, Search, Layers3, MousePointer2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import AmbientVideo from "@/components/AmbientVideo";
+import {
+  EmptyState,
+  Reveal,
+  SiteFooter,
+  useExperience,
+} from "@/components/Experience";
+import {
+  ArrowDown,
+  ArrowRight,
+  ArrowUpRight,
+  Check,
+  Clock3,
+  Layers3,
+  Search,
+  X,
+  Plus,
+  Mouse,
+} from "lucide-react";
 
-function CategorySkeleton(){return <div className="premium-surface rounded-2xl p-6 h-[210px]"><div className="w-12 h-12 rounded-xl skeleton-shimmer"/><div className="h-5 w-1/2 rounded mt-5 skeleton-shimmer"/><div className="h-3 w-full rounded mt-3 skeleton-shimmer"/><div className="h-3 w-4/5 rounded mt-2 skeleton-shimmer"/></div>}
-
-export default function Portal(){
- const [categories,setCategories]=useState([]);const [loading,setLoading]=useState(true);const [failed,setFailed]=useState(false);const navigate=useNavigate();const reduceMotion=useReducedMotion();
- const {scrollY}=useScroll();const glowY=useTransform(scrollY,[0,700],[0,160]);const titleY=useTransform(scrollY,[0,500],[0,38]);
- const load=()=>{setLoading(true);setFailed(false);api.get('/categories').then(({data})=>setCategories(data)).catch(()=>setFailed(true)).finally(()=>setLoading(false))};
- useEffect(()=>{load()},[]);
- return <div className="min-h-screen grain-bg overflow-hidden"><SiteHeader/>
-  <section className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-14 sm:pt-20 lg:pt-24 pb-12 sm:pb-16">
-   <motion.div aria-hidden="true" style={reduceMotion?undefined:{y:glowY}} className="absolute -top-32 right-[-10rem] w-[36rem] h-[36rem] rounded-full bg-purple-300/20 blur-3xl pointer-events-none"/>
-   <motion.div initial={reduceMotion?false:'hidden'} animate="show" variants={stagger} style={reduceMotion?undefined:{y:titleY}} className="relative max-w-4xl">
-    <motion.div variants={fadeUp} className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-100/80 border border-purple-200/60 text-purple-700 text-xs font-semibold mb-5"><Sparkles className="w-3.5 h-3.5"/> Gestão simples, do pedido à conclusão</motion.div>
-    <motion.h1 variants={fadeUp} className="font-display text-4xl sm:text-5xl lg:text-[4.2rem] font-extrabold tracking-[-0.055em] text-slate-950 leading-[1.01]">O que você precisa,<br/><span className="text-transparent bg-clip-text bg-gradient-to-r from-[#660099] via-[#8c18ad] to-[#b13bc4]">em movimento.</span></motion.h1>
-    <motion.p variants={fadeUp} className="mt-5 text-base sm:text-lg text-slate-500 leading-relaxed max-w-2xl">Escolha a área, envie sua solicitação e acompanhe o andamento. Sem menus confusos, sem perder o contexto.</motion.p>
-    <motion.div variants={fadeUp} className="mt-7 flex items-center gap-3"><button onClick={()=>document.getElementById('categorias')?.scrollIntoView({behavior:reduceMotion?'auto':'smooth'})} className="group inline-flex items-center gap-2 rounded-full bg-slate-950 text-white px-5 py-3 text-sm font-bold shadow-xl shadow-slate-900/10 transition hover:-translate-y-0.5 hover:bg-[#660099]">Explorar serviços <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1"/></button><span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-400"><MousePointer2 className="w-3.5 h-3.5"/> interativo</span></motion.div>
-   </motion.div>
-  </section>
-
-  <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12"><motion.div initial={{opacity:0,y:24}} whileInView={{opacity:1,y:0}} viewport={{once:true,amount:.4}} transition={{duration:.6}} className="grid sm:grid-cols-3 overflow-hidden rounded-3xl border border-purple-100/80 bg-white/70 backdrop-blur-xl shadow-[0_20px_70px_rgba(70,27,102,.06)]">{[['01','Escolha a área'],['02','Envie o pedido'],['03','Acompanhe o status']].map(([n,t],i)=><motion.div key={n} whileHover={reduceMotion?undefined:{backgroundColor:'rgba(250,245,255,.9)'}} className="relative px-5 py-5 sm:py-6 border-b sm:border-b-0 sm:border-r last:border-0 border-purple-100/70"><span className="font-mono text-[10px] text-purple-400">{n}</span><p className="font-display font-bold text-slate-800 mt-1">{t}</p><motion.div initial={{scaleX:0}} whileInView={{scaleX:1}} viewport={{once:true}} transition={{delay:.15+i*.12,duration:.55}} className="absolute bottom-0 left-0 h-[2px] w-full origin-left bg-gradient-to-r from-purple-600 to-fuchsia-400"/></motion.div>)}</motion.div></section>
-
-  <section id="categorias" className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-24 scroll-mt-24">
-   <motion.div initial={{opacity:0,y:20}} whileInView={{opacity:1,y:0}} viewport={{once:true}} className="flex items-end justify-between gap-4 mb-6"><div><p className="text-xs font-bold uppercase tracking-[0.14em] text-purple-600">Categorias</p><h2 className="font-display text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 mt-1">Escolha por onde começar</h2></div>{!loading&&categories.length>0&&<span className="hidden sm:inline-flex items-center gap-1.5 text-xs font-medium text-slate-400"><Layers3 className="w-3.5 h-3.5"/>{categories.length} opções disponíveis</span>}</motion.div>
-   {loading?<div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">{[0,1,2,3,4,5].map(i=><CategorySkeleton key={i}/>)}</div>:failed?<div className="premium-surface rounded-3xl py-14 px-6 text-center"><Search className="w-5 h-5 text-rose-500 mx-auto mb-4"/><h3 className="font-display font-bold text-slate-900">Não foi possível carregar as categorias</h3><p className="text-sm text-slate-500 mt-1">A conexão pode ter oscilado. Tente novamente.</p><Button onClick={load} className="mt-5 bg-[#660099] hover:bg-[#520080]">Tentar novamente</Button></div>:categories.length===0?<div className="premium-surface rounded-3xl py-14 px-6 text-center"><Layers3 className="w-5 h-5 text-purple-500 mx-auto mb-4"/><h3 className="font-display font-bold text-slate-900">Nenhuma categoria disponível agora</h3></div>:<motion.div variants={stagger} initial={reduceMotion?false:'hidden'} whileInView="show" viewport={{once:true,amount:.08}} className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">{categories.map((cat,i)=><motion.button variants={fadeUp} whileTap={reduceMotion?undefined:tap} whileHover={reduceMotion?undefined:{y:-7,scale:1.01}} transition={{duration:.22}} key={cat.id} onClick={()=>navigate(`/abrir/${cat.id}`)} className="group relative overflow-hidden text-left premium-card p-5 sm:p-6 focus-visible:ring-2 focus-visible:ring-purple-500"><motion.div aria-hidden="true" className="absolute -right-12 -top-12 w-36 h-36 rounded-full bg-purple-100/70 blur-2xl opacity-0 group-hover:opacity-100 transition-opacity"/><div className="relative"><div className="flex items-start justify-between"><motion.div whileHover={reduceMotion?undefined:{rotate:-6,scale:1.08}} className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#660099] to-[#9b26b6] flex items-center justify-center shadow-lg shadow-purple-500/20"><CategoryIcon name={cat.icon} className="w-6 h-6 text-white"/></motion.div><span className="font-mono text-[10px] text-slate-300">{String(i+1).padStart(2,'0')}</span></div><h3 className="font-display text-lg font-bold text-slate-950 mt-4">{cat.name}</h3><p className="mt-1.5 text-sm text-slate-500 leading-relaxed min-h-[42px]">{cat.description}</p><div className="mt-5 flex items-center justify-between"><span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-50 text-purple-700 text-xs font-semibold"><Clock className="w-3.5 h-3.5"/>{cat.lead_time_hours}h</span><span className="w-9 h-9 rounded-full bg-slate-50 group-hover:bg-[#660099] group-hover:text-white text-purple-700 inline-flex items-center justify-center transition-all"><ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5"/></span></div></div></motion.button>)}</motion.div>}
-  </section>
- </div>
+const normalize = (s) =>
+  s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+function OrbitalScene() {
+  return (
+    <div className="orbital-scene" aria-hidden="true">
+      <div className="scene-grid" />
+      <div className="orbital-glow" />
+      <AmbientVideo />
+      <div className="scene-node node-one">
+        <span />
+        <span>Solicitar</span>
+        <ArrowUpRight size={13} />
+      </div>
+      <div className="scene-node node-two">
+        <span />
+        <span>Acompanhar</span>
+        <ArrowUpRight size={13} />
+      </div>
+      <div className="scene-node node-three">
+        <Check size={13} />
+        <span>Resolver</span>
+      </div>
+      <span className="scene-coordinate coordinate-top">
+        01 — CENTRAL DE SERVIÇOS
+      </span>
+      <span className="scene-coordinate coordinate-bottom">
+        PESSOAS + PROCESSOS + SOLUÇÕES
+      </span>
+    </div>
+  );
+}
+export default function Portal() {
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState("default");
+  const hero = useRef(null);
+  const searchInput = useRef(null);
+  const reduced = useReducedMotion();
+  const { animationsEnabled } = useExperience();
+  const { hash } = useLocation();
+  const { scrollYProgress } = useScroll({
+    target: hero,
+    offset: ["start start", "end start"],
+  });
+  const sceneY = useTransform(scrollYProgress, [0, 1], [0, 90]);
+  const sceneRotate = useTransform(scrollYProgress, [0, 1], [0, -6]);
+  const load = useCallback(async (signal) => {
+    setLoading(true);
+    setError(false);
+    try {
+      const { data } = await api.get("/categories", { signal });
+      setCategories(data);
+    } catch (e) {
+      if (e.code !== "ERR_CANCELED") setError(true);
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
+  useEffect(() => {
+    if (hash) document.getElementById(hash.slice(1))?.scrollIntoView();
+  }, [hash]);
+  useEffect(() => {
+    const shortcut = (e) => {
+      if (
+        e.key === "/" &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName) &&
+        !e.target.isContentEditable
+      ) {
+        e.preventDefault();
+        searchInput.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", shortcut);
+    return () => window.removeEventListener("keydown", shortcut);
+  }, []);
+  const filtered = useMemo(() => {
+    const result = categories.filter((c) =>
+      normalize(`${c.name} ${c.description}`).includes(normalize(query.trim())),
+    );
+    if (sort === "fast")
+      result.sort((a, b) => a.lead_time_hours - b.lead_time_hours);
+    if (sort === "name")
+      result.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+    return result;
+  }, [categories, query, sort]);
+  return (
+    <div className="portal-page">
+      <SiteHeader />
+      <main id="main-content">
+        <section ref={hero} className="hero shell">
+          <Reveal className="hero-copy">
+            <div className="eyebrow">
+              <span className="signal-dot" /> SEU TRABALHO, MAIS FLUIDO
+            </div>
+            <h1>
+              Tudo conectado.
+              <br />
+              Tudo sob
+              <br />
+              <span>controle.</span>
+            </h1>
+            <p>
+              Da primeira solicitação à solução.
+              <br className="desktop-break" /> Um único lugar para conectar você
+              a tudo que precisa.
+            </p>
+            <div className="hero-actions">
+              <a
+                href="#servicos"
+                className="button button-primary"
+                data-testid="explore-services"
+              >
+                Abrir um chamado <ArrowUpRight size={19} />
+              </a>
+              <Link to="/acompanhar" className="button button-text">
+                Acompanhar solicitação <ArrowRight size={16} />
+              </Link>
+            </div>
+            <div className="hero-proof">
+              <span>
+                <Check size={14} /> Solicitação simples
+              </span>
+              <span>
+                <Check size={14} /> Prazos definidos
+              </span>
+            </div>
+          </Reveal>
+          <motion.div
+            className="hero-visual"
+            style={
+              reduced || !animationsEnabled
+                ? {}
+                : { y: sceneY, rotate: sceneRotate }
+            }
+          >
+            <OrbitalScene />
+          </motion.div>
+          <a href="#servicos" className="scroll-cue">
+            <Mouse size={15} /> EXPLORE OS SERVIÇOS <ArrowDown size={14} />
+          </a>
+        </section>
+        <div className="benefit-strip">
+          <div className="shell">
+            <span>
+              <Layers3 /> Todas as áreas, um só portal
+            </span>
+            <i />
+            <span>
+              <Clock3 /> Visibilidade em cada etapa
+            </span>
+            <i />
+            <span>
+              <Check /> Menos esforço. Mais resultado.
+            </span>
+          </div>
+        </div>
+        <section
+          className="services-section shell"
+          id="servicos"
+          aria-labelledby="services-title"
+        >
+          <Reveal className="section-heading">
+            <div>
+              <p className="eyebrow">01 / ENCONTRE SUA SOLUÇÃO</p>
+              <h2 id="services-title">
+                O que você precisa
+                <br />
+                <span>resolver hoje?</span>
+              </h2>
+            </div>
+            <p>
+              Escolha o serviço. Conte o que precisa.
+              <br />A equipe responsável cuida do próximo passo.
+            </p>
+          </Reveal>
+          <div className="service-toolbar">
+            <div className="search-field">
+              <Search size={19} />
+              <input
+                ref={searchInput}
+                aria-label="Buscar serviço"
+                placeholder="Buscar um serviço ou assunto…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                data-testid="service-search"
+              />
+              {query && (
+                <button onClick={() => setQuery("")} aria-label="Limpar busca">
+                  <X size={17} />
+                </button>
+              )}
+              <kbd>/</kbd>
+            </div>
+            <select
+              aria-label="Ordenar serviços"
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+            >
+              <option value="default">Todos os serviços</option>
+              <option value="fast">Menor prazo primeiro</option>
+              <option value="name">Ordem alfabética</option>
+            </select>
+          </div>
+          <p className="results-count" aria-live="polite">
+            {loading
+              ? "Carregando serviços…"
+              : error
+                ? "Não foi possível carregar os serviços"
+                : `${filtered.length} ${filtered.length === 1 ? "serviço disponível" : "serviços disponíveis"}`}
+          </p>
+          {loading ? (
+            <div
+              className="services-grid"
+              aria-label="Carregando serviços"
+              aria-busy="true"
+            >
+              {[0, 1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="service-skeleton">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              ))}
+            </div>
+          ) : error ? (
+            <EmptyState title="Vamos tentar de novo?" onRetry={() => load()}>
+              Não conseguimos conectar ao portal. Tente carregar os serviços
+              novamente.
+            </EmptyState>
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              title={
+                query
+                  ? "Nenhum serviço com esse nome"
+                  : "Nenhum serviço disponível"
+              }
+              icon={Search}
+            >
+              {query
+                ? "Tente outra palavra, como informática, acessos ou materiais."
+                : "Os serviços aparecerão aqui quando forem disponibilizados pela equipe."}
+            </EmptyState>
+          ) : (
+            <div className="services-grid">
+              {filtered.map((cat, i) => (
+                <Reveal key={cat.id} delay={Math.min(i * 0.045, 0.18)}>
+                  <Link
+                    to={`/abrir/${cat.id}`}
+                    className="service-card"
+                    data-testid={`category-card-${cat.id}`}
+                  >
+                    <div className="service-card-top">
+                      <span className={`service-icon tone-${i % 3}`}>
+                        <CategoryIcon name={cat.icon} />
+                      </span>
+                      <span className="service-number">
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                    </div>
+                    <h3>{cat.name}</h3>
+                    <p>{cat.description}</p>
+                    <div className="service-card-bottom">
+                      <span>
+                        <Clock3 size={14} /> Prazo: {cat.lead_time_hours}h
+                      </span>
+                      <span
+                        className="service-card-arrow"
+                        aria-label="Abrir chamado"
+                      >
+                        <ArrowUpRight size={20} />
+                      </span>
+                    </div>
+                  </Link>
+                </Reveal>
+              ))}
+              {!query && (
+                <Reveal delay={0.15}>
+                  <Link className="service-card track-card" to="/acompanhar">
+                    <span className="track-radar">
+                      <Search size={28} />
+                    </span>
+                    <h3>Já tem um chamado?</h3>
+                    <p>
+                      Cada etapa, sem perder de vista.
+                      <br />
+                      Consulte o andamento da sua solicitação.
+                    </p>
+                    <div className="service-card-bottom">
+                      <span>Acompanhar agora</span>
+                      <ArrowUpRight size={22} />
+                    </div>
+                  </Link>
+                </Reveal>
+              )}
+            </div>
+          )}
+        </section>
+        <section
+          className="how-section shell"
+          id="como-funciona"
+          aria-labelledby="how-title"
+        >
+          <Reveal className="how-heading">
+            <p className="eyebrow">02 / SIMPLES DO INÍCIO AO FIM</p>
+            <h2 id="how-title">
+              Menos burocracia.
+              <br />
+              <span>Mais movimento.</span>
+            </h2>
+            <p>
+              Um caminho claro entre
+              <br />o que você precisa e a solução.
+            </p>
+            <a href="#servicos" className="button button-secondary">
+              Vamos começar <ArrowUpRight size={17} />
+            </a>
+          </Reveal>
+          <div className="process-list">
+            {[
+              {
+                n: "01",
+                title: "Escolha seu serviço",
+                text: "Encontre a categoria certa e confira o prazo estimado antes de começar.",
+                icon: Layers3,
+              },
+              {
+                n: "02",
+                title: "Conte o que você precisa",
+                text: "Preencha seus dados, detalhe a solicitação e inclua um anexo se necessário.",
+                icon: Plus,
+              },
+              {
+                n: "03",
+                title: "Acompanhe cada avanço",
+                text: "Receba seu protocolo e consulte o status até a conclusão, tudo por aqui.",
+                icon: Check,
+              },
+            ].map(({ n, title, text, icon: Icon }) => (
+              <Reveal className="process-step" key={n}>
+                <span className="step-number">{n}</span>
+                <div>
+                  <Icon size={22} />
+                  <h3>{title}</h3>
+                  <p>{text}</p>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+        </section>
+        <section className="faq-section shell">
+          <Reveal>
+            <p className="eyebrow">ANTES DE COMEÇAR</p>
+            <h2>Alguma dúvida?</h2>
+          </Reveal>
+          <div>
+            {[
+              {
+                q: "Preciso de uma conta para abrir um chamado?",
+                a: "Não. Informe sua matrícula, e-mail corporativo e empresa no formulário do serviço. A área de gestão é destinada aos responsáveis pelo atendimento.",
+              },
+              {
+                q: "Como acompanho minha solicitação?",
+                a: "Acesse Acompanhar chamado e busque pelo protocolo, e-mail ou matrícula informada. Você verá o status atual e o prazo estimado.",
+              },
+              {
+                q: "Posso enviar arquivos junto com o chamado?",
+                a: "Sim. Você pode anexar um arquivo de até 10 MB. Nas categorias que pedem uma planilha modelo, baixe o Excel, preencha e envie no formulário.",
+              },
+              {
+                q: "O prazo é igual para todos os serviços?",
+                a: "Cada categoria tem seu próprio prazo estimado em horas. Ele aparece no cartão do serviço, no formulário e no acompanhamento da solicitação.",
+              },
+            ].map(({ q, a }) => (
+              <details key={q}>
+                <summary>
+                  {q}
+                  <Plus size={18} />
+                </summary>
+                <p>{a}</p>
+              </details>
+            ))}
+          </div>
+        </section>
+        <Reveal className="final-cta shell">
+          <div>
+            <p className="eyebrow">SEU PRÓXIMO PASSO COMEÇA AQUI</p>
+            <h2>Pronto para simplificar?</h2>
+          </div>
+          <a href="#servicos" className="button button-primary">
+            Encontre seu serviço <ArrowUpRight size={19} />
+          </a>
+        </Reveal>
+      </main>
+      <SiteFooter />
+    </div>
+  );
 }
