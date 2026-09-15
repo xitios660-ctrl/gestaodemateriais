@@ -95,9 +95,26 @@ def as_object_id(value: str, detail: str = "Recurso não encontrado") -> ObjectI
         raise HTTPException(status_code=404, detail=detail)
 
 
+def get_client_ip(request: Request) -> str:
+    """Return a stable client IP behind Render/Cloudflare proxies."""
+    candidates = [
+        request.headers.get("cf-connecting-ip"),
+        (request.headers.get("x-forwarded-for") or "").split(",")[0].strip(),
+        request.client.host if request.client else "",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            return str(ipaddress.ip_address(candidate.strip()))
+        except ValueError:
+            continue
+    return "unknown"
+
+
 async def enforce_rate_limit(request: Request, scope: str, limit: int, minutes: int = 1) -> None:
     """Small Mongo-backed limiter for unauthenticated, abuse-prone endpoints."""
-    ip = request.client.host if request.client else "unknown"
+    ip = get_client_ip(request)
     now = datetime.now(timezone.utc)
     bucket = int(now.timestamp() // max(60, minutes * 60))
     key = hashlib.sha256(f"{scope}:{ip}:{bucket}".encode()).hexdigest()
@@ -575,7 +592,7 @@ LOCKOUT_MINUTES = 15
 @api_router.post("/auth/login")
 async def login(payload: LoginInput, request: Request, response: Response):
     email = payload.email.lower().strip()
-    ip = request.client.host if request.client else "unknown"
+    ip = get_client_ip(request)
     identifier = f"{ip}:{email}"
     window = datetime.now(timezone.utc) - timedelta(minutes=LOCKOUT_MINUTES)
     recent = await db.login_attempts.count_documents(
