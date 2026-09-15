@@ -107,3 +107,27 @@ Abre em `http://localhost:3000`.
 - Autenticação JWT em cookies httpOnly (access 15min / refresh 7 dias)
 - Proteção contra brute force no login e throttle no "esqueci a senha"
 - MongoDB: coleções `users`, `categories`, `tickets`, `counters`, `login_attempts`, `password_reset_tokens`, `password_reset_requests`
+
+
+## Deploy em produção
+
+O projeto agora pode rodar como **um único serviço**: o React é compilado e servido pelo FastAPI no mesmo domínio.
+
+### Docker
+1. Copie as variáveis de `.env.example` para o provedor.
+2. Configure obrigatoriamente `MONGO_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` e `FRONTEND_URL`.
+3. Faça o build usando o `Dockerfile` da raiz.
+4. O health check é `/api/health`.
+
+### Render
+Há um `render.yaml` pronto na raiz. Ao criar o Blueprint, informe as variáveis marcadas como `sync: false`.
+
+### Mudanças de portabilidade
+- O frontend não carrega mais scripts da Emergent.
+- `REACT_APP_BACKEND_URL` virou opcional: sem ele, o frontend usa o mesmo domínio.
+- O backend possui health check e valida a conexão com MongoDB no startup.
+- Uploads têm fallback para disco local quando o storage da Emergent não está configurado.
+- Cookies funcionam em HTTPS de produção e também em desenvolvimento local.
+- As dependências Python foram reduzidas às bibliotecas realmente usadas pelo projeto.
+
+> Em serviços com disco efêmero, configure um disco persistente em `STORAGE_DIR` ou um storage externo para preservar anexos após reinícios/deploys.
