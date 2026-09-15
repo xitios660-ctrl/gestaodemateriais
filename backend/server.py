@@ -529,6 +529,65 @@ async def notify_owners(ticket: dict, owners: List[str]):
                                 {"$set": {"email_log": log}})
 
 
+async def send_status_update_email(ticket: dict, previous_status: str, new_status: str, note: Optional[str] = None) -> bool:
+    requester = ticket.get("requester") or {}
+    to_email = str(requester.get("email") or "").strip().lower()
+    if not to_email:
+        logger.warning("Status e-mail skipped for %s: requester e-mail missing", ticket.get("ticket_number"))
+        return False
+
+    base = FRONTEND_URL.rstrip("/")
+    if not base.startswith("https://"):
+        logger.error("Status e-mail skipped: FRONTEND_URL inválida")
+        return False
+
+    ticket_number = escape(str(ticket.get("ticket_number") or ""))
+    category_name = escape(str(ticket.get("category_name") or ""))
+    old_label = escape(STATUS_LABELS.get(previous_status, previous_status or ""))
+    new_label = escape(STATUS_LABELS.get(new_status, new_status or ""))
+    track_link = f"{base}/acompanhar?q={ticket_number}"
+    safe_note = escape(str(note or "").strip())
+    note_html = (
+        f'<p style="color:#475569"><strong>Observação:</strong> {safe_note}</p>'
+        if safe_note else ""
+    )
+
+    html = (
+        f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif;max-width:560px">'
+        f'<h2 style="color:#660099;margin:0 0 16px">Atualização do chamado {ticket_number}</h2>'
+        f'<p style="color:#475569">Seu chamado de <strong>{category_name}</strong> teve o status atualizado.</p>'
+        f'<table role="presentation" style="margin:16px 0;font-size:14px">'
+        f'<tr><td style="padding:4px 12px 4px 0;color:#64748b">Status anterior</td><td><strong>{old_label}</strong></td></tr>'
+        f'<tr><td style="padding:4px 12px 4px 0;color:#64748b">Novo status</td><td><strong>{new_label}</strong></td></tr>'
+        f'</table>'
+        f'{note_html}'
+        f'<p><a href="{escape(track_link)}" style="background:#660099;color:#fff;padding:10px 20px;'
+        f'border-radius:8px;text-decoration:none;display:inline-block">Acompanhar chamado</a></p>'
+        f'<p style="font-size:12px;color:#94a3b8;margin-top:24px">Enviado por {escape(EMAIL_FROM_NAME)}.</p>'
+        f'</td></tr></table>'
+    )
+
+    email_id = await send_email(
+        to_email,
+        f"[{ticket.get('ticket_number','')}] Status atualizado - {STATUS_LABELS.get(new_status, new_status)}",
+        html,
+    )
+    await db.tickets.update_one(
+        {"_id": ticket["_id"]},
+        {"$push": {
+            "status_email_log": {
+                "to": to_email,
+                "from_status": previous_status,
+                "to_status": new_status,
+                "email_id": email_id,
+                "sent": bool(email_id),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+        }},
+    )
+    return bool(email_id)
+
+
 async def send_password_reset_email(to_email: str, token: str) -> bool:
     base = FRONTEND_URL.rstrip("/")
     link = f"{base}/reset-password?token={token}"
@@ -1332,7 +1391,12 @@ async def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
 
 
 @api_router.patch("/tickets/{ticket_id}/status")
-async def update_status(ticket_id: str, payload: StatusUpdate, user: dict = Depends(get_current_user)):
+async def update_status(
+    ticket_id: str,
+    payload: StatusUpdate,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
     if payload.status not in STATUS_LABELS:
         raise HTTPException(status_code=400, detail="Status inválido")
     oid = as_object_id(ticket_id, "Chamado não encontrado")
@@ -1354,6 +1418,13 @@ async def update_status(ticket_id: str, payload: StatusUpdate, user: dict = Depe
         "from": previous_status,
         "to": payload.status,
     })
+    background_tasks.add_task(
+        send_status_update_email,
+        dict(doc),
+        previous_status,
+        payload.status,
+        payload.note,
+    )
     return ser_ticket(doc)
 
 
