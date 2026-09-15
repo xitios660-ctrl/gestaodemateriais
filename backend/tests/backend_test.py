@@ -10,12 +10,14 @@ import requests
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://ticket-builder-14.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
 
-ADMIN_EMAIL = "matheus.cardosooliveira1@gmail.com"
-ADMIN_PASSWORD = "Chamados@2026"
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD") or os.environ.get("ADMIN_PASSWORD")
 
 
 @pytest.fixture(scope="session")
 def admin_session():
+    if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+        pytest.skip("Credenciais de teste admin não configuradas")
     s = requests.Session()
     r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=30)
     assert r.status_code == 200, f"admin login failed: {r.status_code} {r.text}"
@@ -49,7 +51,8 @@ def test_list_categories_public(categories):
 
 # --- Auth ---
 def test_login_invalid():
-    r = requests.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": "wrong-xyz"}, timeout=30)
+    email = ADMIN_EMAIL or "invalid-test@example.com"
+    r = requests.post(f"{API}/auth/login", json={"email": email, "password": "wrong-xyz"}, timeout=30)
     assert r.status_code == 401
 
 
@@ -67,6 +70,8 @@ def test_auth_me_ok(admin_session):
 
 
 def test_login_sets_httponly_cookies():
+    if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+        pytest.skip("Credenciais de teste admin não configuradas")
     s = requests.Session()
     r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=30)
     assert r.status_code == 200
