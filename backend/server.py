@@ -572,6 +572,18 @@ async def send_email(to: str, subject: str, html: str) -> Optional[str]:
     return None
 
 
+def format_field_value(value) -> str:
+    if isinstance(value, bool):
+        return "Sim" if value else "Não"
+    if isinstance(value, dict) and ("parent" in value or "child" in value):
+        parent = str(value.get("parent") or "").strip()
+        child = str(value.get("child") or "").strip()
+        if parent and child:
+            return f"{parent} → {child}"
+        return parent or child or "—"
+    return str(value if value not in (None, "") else "—")
+
+
 async def notify_owners(ticket: dict, owners: List[str]):
     base = FRONTEND_URL.rstrip("/")
     if not base.startswith("https://"):
@@ -590,6 +602,12 @@ async def notify_owners(ticket: dict, owners: List[str]):
             ("Prazo (SLA)", f"{ticket.get('lead_time_hours', 0)} horas"),
         ]
     )
+    detail_rows = "".join(
+        f'<tr><td style="padding:4px 12px 4px 0;color:#64748b">{escape(str(k))}</td>'
+        f'<td style="padding:4px 0;color:#0f172a"><strong>{escape(format_field_value(v))}</strong></td></tr>'
+        for k, v in (ticket.get("field_values") or {}).items()
+    )
+    rows += detail_rows
     html = (
         f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif;max-width:560px">'
         f'<h2 style="color:#7c3aed;margin:0 0 16px">Novo chamado aberto: {escape(ticket["ticket_number"])}</h2>'
@@ -814,12 +832,20 @@ class UserUpdate(BaseModel):
     categories: Optional[List[str]] = Field(default=None, max_length=200)
 
 
+class DependentOption(BaseModel):
+    parent: str = Field(min_length=1, max_length=160)
+    children: List[str] = Field(default_factory=list, min_length=1, max_length=200)
+
+
 class CustomField(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), max_length=80)
     label: str = Field(min_length=1, max_length=160)
-    type: Literal["text", "textarea", "select", "number", "date", "checkbox"]
+    type: Literal["text", "textarea", "select", "number", "date", "checkbox", "dependent_select"]
     required: bool = False
     options: List[str] = Field(default_factory=list, max_length=100)
+    parent_label: Optional[str] = Field(default=None, max_length=160)
+    child_label: Optional[str] = Field(default=None, max_length=160)
+    dependent_options: List[DependentOption] = Field(default_factory=list, max_length=200)
 
 
 class CategoryInput(BaseModel):
@@ -1325,12 +1351,45 @@ async def create_ticket(
     if not isinstance(field_values, dict) or len(field_values) > 100:
         raise HTTPException(status_code=400, detail="Campos da solicitação inválidos")
     for field in category.get("fields", []):
+        label = field.get("label")
+        field_type = field.get("type")
+        value = field_values.get(label)
+
+        if field_type == "dependent_select":
+            pair = value if isinstance(value, dict) else {}
+            selected_parent = str(pair.get("parent") or "").strip()
+            selected_child = str(pair.get("child") or "").strip()
+
+            if field.get("required") and (not selected_parent or not selected_child):
+                raise HTTPException(status_code=400, detail=f"Campo obrigatório: {label or 'campo'}")
+
+            if selected_parent or selected_child:
+                allowed_pairs = {
+                    str(item.get("parent") or "").strip(): [
+                        str(child).strip()
+                        for child in (item.get("children") or [])
+                        if str(child).strip()
+                    ]
+                    for item in (field.get("dependent_options") or [])
+                    if str(item.get("parent") or "").strip()
+                }
+                if (
+                    not selected_parent
+                    or not selected_child
+                    or selected_parent not in allowed_pairs
+                    or selected_child not in allowed_pairs[selected_parent]
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Seleção inválida no campo: {label or 'campo'}",
+                    )
+            continue
+
         if not field.get("required"):
             continue
-        value = field_values.get(field.get("label"))
-        missing = value is not True if field.get("type") == "checkbox" else not str(value or "").strip()
+        missing = value is not True if field_type == "checkbox" else not str(value or "").strip()
         if missing:
-            raise HTTPException(status_code=400, detail=f"Campo obrigatório: {field.get('label', 'campo')}")
+            raise HTTPException(status_code=400, detail=f"Campo obrigatório: {label or 'campo'}")
     for key, value in field_values.items():
         if len(str(key)) > 160 or len(str(value)) > 10000:
             raise HTTPException(status_code=400, detail="Um dos campos excede o limite permitido")
