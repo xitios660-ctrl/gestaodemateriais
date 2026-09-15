@@ -218,7 +218,14 @@ export default function AdminDashboard() {
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filters, setFilters] = useState({ status: "all", category_id: "all", search: "" });
+  const [exporting, setExporting] = useState(false);
+  const [filters, setFilters] = useState({
+    status: "all",
+    category_id: "all",
+    search: "",
+    start_date: "",
+    end_date: "",
+  });
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ total: 0, page: 1, pages: 1, limit: 50 });
   const [selected, setSelected] = useState(null);
@@ -228,10 +235,12 @@ export default function AdminDashboard() {
     status: filters.status,
     category_id: filters.category_id,
     search: deferredSearch,
+    start_date: filters.start_date || undefined,
+    end_date: filters.end_date || undefined,
     page,
     limit: 50,
     paginated: true,
-  }), [filters.status, filters.category_id, deferredSearch, page]);
+  }), [filters.status, filters.category_id, filters.start_date, filters.end_date, deferredSearch, page]);
 
   const loadTickets = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -273,7 +282,13 @@ export default function AdminDashboard() {
   useEffect(() => { loadTickets(); }, [loadTickets]);
 
   const activeFilters = useMemo(
-    () => [filters.status !== "all", filters.category_id !== "all", !!filters.search.trim()].filter(Boolean).length,
+    () => [
+      filters.status !== "all",
+      filters.category_id !== "all",
+      !!filters.search.trim(),
+      !!filters.start_date,
+      !!filters.end_date,
+    ].filter(Boolean).length,
     [filters]
   );
 
@@ -284,7 +299,7 @@ export default function AdminDashboard() {
 
   const clearFilters = () => {
     setPage(1);
-    setFilters({ status: "all", category_id: "all", search: "" });
+    setFilters({ status: "all", category_id: "all", search: "", start_date: "", end_date: "" });
   };
 
   const refreshAll = async () => {
@@ -292,6 +307,37 @@ export default function AdminDashboard() {
     await Promise.all([loadTickets(true), loadAux()]);
     setRefreshing(false);
     toast.success("Painel atualizado");
+  };
+
+  const exportReport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const params = {
+        status: filters.status,
+        category_id: filters.category_id,
+        search: filters.search.trim() || undefined,
+        start_date: filters.start_date || undefined,
+        end_date: filters.end_date || undefined,
+      };
+      const response = await api.get("/admin/reports/tickets.csv", {
+        params,
+        responseType: "blob",
+      });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `relatorio-chamados-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Relatório exportado");
+    } catch (err) {
+      toast.error(formatApiErrorDetail(err.response?.data?.detail) || "Não foi possível exportar o relatório");
+    } finally {
+      setExporting(false);
+    }
   };
 
   const changeStatus = async (ticketId, status) => {
@@ -455,8 +501,8 @@ export default function AdminDashboard() {
                     </span>
                   )}
                 </div>
-                <div className="flex flex-col md:flex-row gap-2.5">
-                  <div className="relative flex-1">
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5">
+                  <div className="relative md:col-span-4">
                     <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <Input
                       data-testid="ticket-search-input"
@@ -466,25 +512,62 @@ export default function AdminDashboard() {
                       className="pl-9 bg-white border-purple-100 h-10"
                     />
                   </div>
-                  <Select value={filters.status} onValueChange={(v) => updateFilter({ status: v })}>
-                    <SelectTrigger data-testid="filter-status" className="w-full md:w-44 bg-white border-purple-100 h-10"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Todos os status</SelectItem>
-                      {Object.entries(STATUS_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Select value={filters.category_id} onValueChange={(v) => updateFilter({ category_id: v })}>
-                    <SelectTrigger data-testid="filter-category" className="w-full md:w-48 bg-white border-purple-100 h-10"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Todas categorias</SelectItem>
-                      {categories.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  {activeFilters > 0 && (
-                    <Button type="button" variant="ghost" onClick={clearFilters} className="h-10 px-3 text-slate-500 hover:text-purple-700">
-                      <X className="w-4 h-4 mr-1.5" /> Limpar
+                  <div className="md:col-span-2">
+                    <Select value={filters.status} onValueChange={(v) => updateFilter({ status: v })}>
+                      <SelectTrigger data-testid="filter-status" className="w-full bg-white border-purple-100 h-10"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos os status</SelectItem>
+                        {Object.entries(STATUS_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="md:col-span-2">
+                    <Select value={filters.category_id} onValueChange={(v) => updateFilter({ category_id: v })}>
+                      <SelectTrigger data-testid="filter-category" className="w-full bg-white border-purple-100 h-10"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todas categorias</SelectItem>
+                        {categories.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Input
+                    type="date"
+                    aria-label="Data inicial"
+                    data-testid="filter-start-date"
+                    value={filters.start_date}
+                    max={filters.end_date || undefined}
+                    onChange={(e) => updateFilter({ start_date: e.target.value })}
+                    className="md:col-span-2 bg-white border-purple-100 h-10"
+                  />
+                  <Input
+                    type="date"
+                    aria-label="Data final"
+                    data-testid="filter-end-date"
+                    value={filters.end_date}
+                    min={filters.start_date || undefined}
+                    onChange={(e) => updateFilter({ end_date: e.target.value })}
+                    className="md:col-span-2 bg-white border-purple-100 h-10"
+                  />
+                </div>
+                <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <p className="text-[11px] text-slate-400">O relatório respeita os filtros e as permissões desta conta.</p>
+                  <div className="flex items-center gap-2">
+                    {activeFilters > 0 && (
+                      <Button type="button" variant="ghost" onClick={clearFilters} className="h-9 px-3 text-slate-500 hover:text-purple-700">
+                        <X className="w-4 h-4 mr-1.5" /> Limpar
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={exportReport}
+                      disabled={exporting}
+                      className="h-9 border-purple-200 text-purple-700 hover:bg-purple-50 gap-2"
+                    >
+                      {exporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                      {exporting ? "Exportando..." : "Exportar CSV"}
                     </Button>
-                  )}
+                  </div>
                 </div>
               </div>
 
