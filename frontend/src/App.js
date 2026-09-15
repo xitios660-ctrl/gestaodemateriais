@@ -5,6 +5,7 @@ import { Toaster } from "sonner";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import AppErrorBoundary from "@/components/AppErrorBoundary";
+import ConnectionStatus from "@/components/ConnectionStatus";
 const Portal = lazy(() => import("@/pages/Portal"));
 const TicketForm = lazy(() => import("@/pages/TicketForm"));
 const Tracker = lazy(() => import("@/pages/Tracker"));
@@ -71,6 +72,7 @@ function App() {
       <AuthProvider>
         <BrowserRouter>
           <Toaster position="top-right" richColors closeButton toastOptions={{ duration: 3500 }} />
+          <ConnectionStatus />
           <AppErrorBoundary>
             <Suspense fallback={<AppLoader />}>
               <AnimatedRoutes />
