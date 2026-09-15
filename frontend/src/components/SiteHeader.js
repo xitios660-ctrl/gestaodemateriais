@@ -39,6 +39,7 @@ export function SiteHeader() {
         <Button
           variant="ghost"
           data-testid="nav-track-button"
+          aria-label="Consultar chamado"
           onClick={() => navigate("/acompanhar")}
           className="text-slate-600 hover:text-purple-700 hover:bg-purple-50 gap-2 rounded-xl shrink-0"
         >
