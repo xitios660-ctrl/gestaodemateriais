@@ -174,7 +174,7 @@ export default function UserManager() {
                   <Pencil className="w-3.5 h-3.5" /> Editar
                 </Button>
                 {current?.id !== u.id && (
-                  <Button variant="outline" size="sm" data-testid={`delete-user-${u.id}`} onClick={() => setDeleteTarget(u)} className="border-rose-200 text-rose-600 hover:bg-rose-50">
+                  <Button variant="outline" size="sm" data-testid={`delete-user-${u.id}`} aria-label={`Remover usuário ${u.name}`} onClick={() => setDeleteTarget(u)} className="border-rose-200 text-rose-600 hover:bg-rose-50">
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>
                 )}
