@@ -17,6 +17,7 @@ const ACTION_LABELS = {
   "category.update": "Categoria atualizada",
   "category.delete": "Categoria removida",
   "ticket.status": "Status de chamado alterado",
+  "report.export": "Relatório exportado",
 };
 
 function iconFor(type) {
@@ -43,6 +44,13 @@ function detailText(entry) {
   }
   if (entry.entity_type === "category") {
     return d.name || "Categoria";
+  }
+  if (entry.entity_type === "report") {
+    const period = [d.start_date, d.end_date].filter(Boolean).join(" a ");
+    return [
+      `${d.rows ?? 0} linha${d.rows === 1 ? "" : "s"}`,
+      period ? `período ${period}` : "todos os períodos",
+    ].join(" · ");
   }
   return entry.entity_id || "";
 }
