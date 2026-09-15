@@ -262,6 +262,23 @@ def scope_match(user: dict) -> dict:
     return {"category_id": {"$in": user.get("categories", []) or []}}
 
 
+async def get_ticket_notification_admin_email() -> str:
+    """Return the admin account that most recently logged in to manage the panel."""
+    target = await db.system_settings.find_one({"_id": "ticket_notification_admin"})
+    if target:
+        user_id = str(target.get("user_id") or "")
+        if ObjectId.is_valid(user_id):
+            admin = await db.users.find_one({"_id": ObjectId(user_id), "role": "admin"})
+            if admin and admin.get("email"):
+                return str(admin["email"]).strip().lower()
+
+    # Backward-compatible fallback until an administrator logs in after this update.
+    if PRIMARY_NOTIFICATION_EMAIL:
+        return PRIMARY_NOTIFICATION_EMAIL
+    admin = await db.users.find_one({"role": "admin"}, sort=[("last_login_at", -1), ("created_at", 1)])
+    return str((admin or {}).get("email") or "").strip().lower()
+
+
 async def write_audit(user: dict, action: str, entity_type: str, entity_id: str, details: Optional[dict] = None):
     """Best-effort audit trail. Never store credentials or raw secrets here."""
     try:
@@ -883,6 +900,19 @@ async def login(payload: LoginInput, request: Request, response: Response):
     await db.login_attempts.delete_many({"identifier": identifier})
     uid = str(user["_id"])
     ver = user.get("token_version", 0)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.users.update_one({"_id": user["_id"]}, {"$set": {"last_login_at": now_iso}})
+    if user.get("role", "admin") == "admin":
+        await db.system_settings.update_one(
+            {"_id": "ticket_notification_admin"},
+            {"$set": {
+                "user_id": uid,
+                "email": str(user.get("email") or "").strip().lower(),
+                "name": user.get("name", ""),
+                "updated_at": now_iso,
+            }},
+            upsert=True,
+        )
     set_auth_cookies(response, create_access_token(uid, email, ver), create_refresh_token(uid, ver))
     return {"id": uid, "email": user["email"], "name": user.get("name", "Admin"), "role": user.get("role", "admin")}
 
@@ -1326,7 +1356,8 @@ async def create_ticket(
     res = await db.tickets.insert_one(ticket)
     ticket["_id"] = res.inserted_id
 
-    owners = unique_recipient_emails([PRIMARY_NOTIFICATION_EMAIL, *(category.get("owners", []) or []), *DEFAULT_OWNERS])
+    notification_admin_email = await get_ticket_notification_admin_email()
+    owners = unique_recipient_emails([notification_admin_email])
     if owners:
         background_tasks.add_task(notify_owners, dict(ticket), owners)
     background_tasks.add_task(send_ticket_opened_email, dict(ticket))
@@ -1850,6 +1881,7 @@ async def startup():
     await db.audit_logs.create_index([("actor_id", 1), ("created_at", -1)])
     await db.email_events.create_index([("email", 1), ("received_at", -1)])
     await db.email_events.create_index([("message_id", 1), ("received_at", -1)])
+    await db.users.create_index([("last_login_at", -1)])
     await seed_admin()
     await seed_categories()
     logger.info("Email delivery configured: %s", "yes" if email_delivery_configured() else "no")
