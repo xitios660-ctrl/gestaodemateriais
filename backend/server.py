@@ -7,6 +7,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 import logging
 import asyncio
+import time
 import csv
 import uuid
 import json
@@ -1524,6 +1525,9 @@ async def startup():
     await db.tickets.create_index("ticket_number", unique=True)
     await db.tickets.create_index([("category_id", 1), ("created_at", -1)])
     await db.tickets.create_index([("status", 1), ("created_at", -1)])
+    await db.tickets.create_index([("category_id", 1), ("status", 1), ("created_at", -1)])
+    await db.tickets.create_index([("status", 1), ("due_at", 1)])
+    await db.tickets.create_index([("category_id", 1), ("status", 1), ("due_at", 1)])
     await db.tickets.create_index("requester.email")
     await db.tickets.create_index("requester.matricula")
     await db.password_reset_tokens.create_index("token_hash", unique=True)
@@ -1539,7 +1543,7 @@ async def startup():
         await init_storage()
         logger.info("Storage inicializado (%s)", "Emergent" if EMERGENT_KEY else f"local: {LOCAL_STORAGE_DIR}")
     except Exception as e:
-        logger.warning("Storage remoto indisponível, usando disco local: %s", e)
+        logger.warning("Storage remoto indisponível na inicialização; o serviço tentará novamente sob demanda: %s", e)
 
 
 @api_router.get("/")
@@ -1550,8 +1554,15 @@ async def root():
 @api_router.get("/health")
 async def health():
     try:
+        started = time.perf_counter()
         await client.admin.command("ping")
-        return {"status": "ok", "database": "connected"}
+        db_ms = round((time.perf_counter() - started) * 1000, 1)
+        return {
+            "status": "ok",
+            "database": "connected",
+            "database_latency_ms": db_ms,
+            "storage_mode": "remote" if EMERGENT_KEY else "local",
+        }
     except Exception as e:
         logger.error("Health check falhou: %s", e)
         raise HTTPException(status_code=503, detail="Serviço temporariamente indisponível")
@@ -1574,18 +1585,51 @@ allowed_origins = list(dict.fromkeys([
 
 @app.middleware("http")
 async def security_headers_and_origin_guard(request: Request, call_next):
+    started = time.perf_counter()
+    incoming_request_id = (request.headers.get("x-request-id") or "").strip()
+    request_id = (
+        incoming_request_id
+        if re.fullmatch(r"[A-Za-z0-9._-]{1,80}", incoming_request_id)
+        else uuid.uuid4().hex
+    )
+
     unsafe_method = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
     has_session_cookie = bool(request.cookies.get("access_token") or request.cookies.get("refresh_token"))
     if request.url.path.startswith("/api/") and unsafe_method and has_session_cookie:
         origin = (request.headers.get("origin") or "").rstrip("/")
         if origin and origin not in allowed_origins:
-            return JSONResponse(status_code=403, content={"detail": "Origem da requisição não permitida"})
+            response = JSONResponse(status_code=403, content={"detail": "Origem da requisição não permitida"})
+            response.headers["X-Request-ID"] = request_id
+            return response
 
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "Erro não tratado request_id=%s method=%s path=%s",
+            request_id,
+            request.method,
+            request.url.path,
+        )
+        raise
+
+    elapsed_ms = (time.perf_counter() - started) * 1000
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers["X-Request-ID"] = request_id
+    response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
+
+    if request.url.path.startswith("/api/") and elapsed_ms >= 1000:
+        logger.warning(
+            "Requisição lenta request_id=%s method=%s path=%s status=%s duration_ms=%.1f",
+            request_id,
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+        )
     return response
 
 
