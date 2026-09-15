@@ -34,6 +34,16 @@ jobs:
           CI: "true"
         run: yarn build
 
+  docker:
+    name: Production image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build production container
+        run: docker build --tag gestao-de-materiais:ci .
+
   backend:
     name: Backend validation
     runs-on: ubuntu-latest
