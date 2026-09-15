@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import {
   LogOut, LayoutGrid, Ticket, Search, Clock, CheckCircle2, Inbox,
   TrendingUp, Download, Mail, Paperclip, Users, SlidersHorizontal, AlertTriangle,
-  ChevronRight, ChevronLeft, RefreshCw, X, Sparkles, Activity
+  ChevronRight, ChevronLeft, RefreshCw, X, Sparkles
 } from "lucide-react";
 
 function fmt(dt) {
