@@ -374,6 +374,18 @@ export default function CategoryManager({ categories, catalogs = [], onChange })
                               <span className="block text-[11px] text-slate-400 mt-0.5">
                                 {(catalog.materials || []).filter((item) => item.active !== false).length} sub-item(ns) disponível(is)
                               </span>
+                              {checked && (
+                                <span className="flex flex-wrap gap-1 mt-2">
+                                  {(catalog.materials || []).filter((item) => item.active !== false).slice(0, 6).map((item) => (
+                                    <span key={item.id} className="rounded-md bg-white border border-purple-100 px-1.5 py-0.5 text-[10px] text-slate-500">
+                                      {item.name}
+                                    </span>
+                                  ))}
+                                  {(catalog.materials || []).filter((item) => item.active !== false).length > 6 && (
+                                    <span className="text-[10px] text-purple-600 px-1 py-0.5">+ mais</span>
+                                  )}
+                                </span>
+                              )}
                             </span>
                           </label>
                         );
