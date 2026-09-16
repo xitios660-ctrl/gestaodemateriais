@@ -21,6 +21,7 @@ from typing import Literal
 MAX_ROWS = 5000
 MAX_QUANTITY = 1_000_000_000
 HEADERS = ["Categoria Pai", "Sub-item (Filho)", "Tipo de Medida (Unidade/Metro)", "Múltiplo"]
+CATALOG_HEADERS = ["Sub-item", "Tipo de Medida (Unidade/Metro)", "Múltiplo"]
 
 
 def name_key(value):
@@ -147,6 +148,117 @@ def parse_spreadsheet(raw, filename):
     return parsed, errors
 
 
+
+def parse_catalog_spreadsheet(raw, filename):
+    """Parse a spreadsheet for one already-created catalog. It never creates categories."""
+    rows = spreadsheet_rows(raw, filename)
+    if not rows:
+        raise ValueError("A planilha está vazia")
+
+    aliases = [
+        {"sub-item", "sub-item (filho)", "subitem", "filho", "item"},
+        {"tipo de medida (unidade/metro)", "tipo de medida", "medida"},
+        {"multiplo", "multiplo (obrigatorio se for metro)"},
+    ]
+    headers = [plain(value) for value in rows[0]]
+    indexes = [next((i for i, header in enumerate(headers) if header in choices), None) for choices in aliases]
+    if any(index is None for index in indexes) or len([h for h in headers if h]) != 3:
+        raise ValueError("Colunas esperadas: " + " | ".join(CATALOG_HEADERS))
+
+    parsed, errors, seen = [], [], {}
+    for number, row in enumerate(rows[1:], 2):
+        if not any(str(value or "").strip() for value in row):
+            continue
+        values = [row[i] if i < len(row) else None for i in indexes]
+        child, measure, multiple = values
+        try:
+            if any(str(v or "").lstrip().startswith("=") for v in values):
+                raise ValueError("Substitua fórmulas pelos valores")
+            unit = plain(measure)
+            if unit not in {"unidade", "unidades", "un", "metro", "metros", "m"}:
+                raise ValueError("Tipo de medida deve ser Unidade ou Metro")
+            unit = "metro" if unit in {"metro", "metros", "m"} else "unidade"
+            if unit == "metro" and (multiple is None or str(multiple).strip() == ""):
+                raise ValueError("Múltiplo é obrigatório para Metro")
+            factor = Decimal(str(multiple).replace(",", ".")) if multiple not in (None, "") else Decimal(1)
+            if not factor.is_finite() or factor != factor.to_integral_value() or not 1 <= factor <= MAX_QUANTITY:
+                raise ValueError("Múltiplo deve ser um número inteiro positivo")
+            item = MaterialInput(name=str(child or ""), measure=unit, multiple=int(factor)).model_dump()
+            key = name_key(item["name"])
+            if key in seen and (seen[key]["measure"], seen[key]["multiple"]) != (item["measure"], item["multiple"]):
+                raise ValueError("O mesmo sub-item aparece com regras diferentes na planilha")
+            parsed.append({"row": number, **item})
+            seen[key] = item
+        except (ValueError, InvalidOperation) as exc:
+            message = str(exc)
+            if hasattr(exc, "errors"):
+                message = exc.errors()[0]["msg"]
+            errors.append({"row": number, "message": message})
+    if not parsed and not errors:
+        raise ValueError("Inclua pelo menos um sub-item abaixo do cabeçalho")
+    return parsed, errors
+
+
+def serialize_catalog(doc):
+    data = dict(doc)
+    data["id"] = str(data.pop("_id"))
+    data["materials"] = list(data.get("materials", []))
+    return data
+
+
+def public_catalog(doc):
+    data = serialize_catalog(doc)
+    data["materials"] = [item for item in data.get("materials", []) if item.get("active", True)]
+    return data
+
+
+async def save_catalog_materials(database, catalog, items):
+    query = {
+        "_id": catalog["_id"],
+        "materials": catalog["materials"] if "materials" in catalog else {"$exists": False},
+    }
+    result = await database.material_catalogs.update_one(
+        query,
+        {"$set": {"materials": items, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if not result.matched_count:
+        raise HTTPException(
+            409,
+            "O catálogo mudou durante a operação. Atualize e tente novamente",
+        )
+
+
+def plan_catalog_items(rows, catalog):
+    items = list(catalog.get("materials", []))
+    by_name = {name_key(item["name"]): item for item in items}
+    preview, errors = [], []
+    counts = {"items_created": 0, "skipped": 0}
+
+    for row in rows:
+        existing = by_name.get(name_key(row["name"]))
+        action = "criar"
+        if existing:
+            if existing["measure"] != row["measure"] or existing["multiple"] != row["multiple"]:
+                errors.append({
+                    "row": row["row"],
+                    "message": "Sub-item já cadastrado com outra medida ou múltiplo. Edite-o manualmente",
+                })
+                continue
+            counts["skipped"] += 1
+            action = "manter"
+        else:
+            if len(items) >= MAX_ROWS:
+                errors.append({"row": row["row"], "message": f"Limite de {MAX_ROWS} sub-itens por catálogo"})
+                continue
+            item = {k: row[k] for k in ("name", "measure", "multiple", "active")}
+            item["id"] = str(uuid.uuid4())
+            items.append(item)
+            by_name[name_key(item["name"])] = item
+            counts["items_created"] += 1
+        preview.append({**row, "action": action})
+
+    return items, preview, counts, errors
+
 def catalog_plan(rows, categories):
     by_name, errors = {}, []
     for category in categories:
@@ -197,6 +309,193 @@ async def save_materials(database, category, items):
 
 
 def register_material_routes(router, get_db, require_admin, audit):
+    @router.get("/material-catalogs")
+    async def list_material_catalogs():
+        database = get_db()
+        docs = await database.material_catalogs.find({}).sort("created_at", 1).to_list(500)
+        return [public_catalog(doc) for doc in docs]
+
+    @router.post("/material-catalogs")
+    async def create_material_catalog(user=Depends(require_admin)):
+        database = get_db()
+        counter = await database.counters.find_one_and_update(
+            {"_id": "material-catalogs"},
+            {"$inc": {"seq": 1}},
+            upsert=True,
+            return_document=True,
+        )
+        seq = int((counter or {}).get("seq") or 1)
+        now = datetime.now(timezone.utc).isoformat()
+        doc = {
+            "name": f"Catálogo {seq}",
+            "materials": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = await database.material_catalogs.insert_one(doc)
+        doc["_id"] = result.inserted_id
+        await audit(user, "catalog.create", "material_catalog", str(result.inserted_id), {"name": doc["name"]})
+        return serialize_catalog(doc)
+
+    @router.delete("/material-catalogs/{catalog_id}")
+    async def delete_material_catalog(catalog_id: str, user=Depends(require_admin)):
+        if not ObjectId.is_valid(catalog_id):
+            raise HTTPException(404, "Catálogo não encontrado")
+        database = get_db()
+        catalog = await database.material_catalogs.find_one({"_id": ObjectId(catalog_id)})
+        if not catalog:
+            raise HTTPException(404, "Catálogo não encontrado")
+        linked = await database.categories.count_documents({"kit_catalog_ids": catalog_id})
+        if linked:
+            raise HTTPException(
+                409,
+                f"Este catálogo está vinculado a {linked} categoria(s). Remova o vínculo antes de excluir",
+            )
+        await database.material_catalogs.delete_one({"_id": catalog["_id"]})
+        await audit(user, "catalog.delete", "material_catalog", catalog_id, {"name": catalog.get("name", "")})
+        return {"message": "Catálogo removido"}
+
+    @router.get("/material-catalogs/template")
+    async def catalog_template(format: Literal["xlsx", "csv"] = "xlsx", user=Depends(require_admin)):
+        examples = [["HGU5 CV", "Unidade", 1], ["Cabo Drop", "Metro", 500]]
+        if format == "csv":
+            buf = StringIO()
+            writer = csv.writer(buf, delimiter=";")
+            writer.writerows([CATALOG_HEADERS, *examples])
+            content, media = buf.getvalue().encode("utf-8-sig"), "text/csv; charset=utf-8"
+        else:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Itens do catálogo"
+            for row in [CATALOG_HEADERS, *examples]:
+                ws.append(row)
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = ws.dimensions
+            for cell in ws[1]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", fgColor="660099")
+                ws.column_dimensions[cell.column_letter].width = 38
+            stream = BytesIO()
+            wb.save(stream)
+            content, media = stream.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return Response(
+            content,
+            media_type=media,
+            headers={"Content-Disposition": f'attachment; filename="modelo-catalogo.{format}"'},
+        )
+
+    @router.post("/material-catalogs/{catalog_id}/import")
+    async def import_into_material_catalog(
+        catalog_id: str,
+        file: UploadFile = File(...),
+        preview: bool = Form(True),
+        user=Depends(require_admin),
+    ):
+        if not ObjectId.is_valid(catalog_id):
+            raise HTTPException(404, "Catálogo não encontrado")
+        raw = await file.read(5 * 1024 * 1024 + 1)
+        if not raw or len(raw) > 5 * 1024 * 1024:
+            raise HTTPException(400, "Envie uma planilha não vazia de até 5 MB")
+        try:
+            rows, errors = await asyncio.to_thread(parse_catalog_spreadsheet, raw, file.filename or "")
+        except Exception as exc:
+            raise HTTPException(
+                400,
+                str(exc) if isinstance(exc, ValueError) else "Planilha inválida. Salve novamente como .xlsx ou .csv",
+            )
+        database = get_db()
+        catalog = await database.material_catalogs.find_one({"_id": ObjectId(catalog_id)})
+        if not catalog:
+            raise HTTPException(404, "Catálogo não encontrado")
+        items, entries, counts, conflicts = plan_catalog_items(rows, catalog)
+        errors.extend(conflicts)
+        result = {
+            "preview": preview,
+            "valid": not errors,
+            "rows": len(rows),
+            "entries": entries,
+            "errors": errors,
+            **counts,
+        }
+        if preview or errors:
+            return result
+        if items != catalog.get("materials", []):
+            await save_catalog_materials(database, catalog, items)
+        await audit(user, "catalog.import", "material_catalog", catalog_id, counts)
+        return result
+
+    @router.post("/material-catalogs/{catalog_id}/materials")
+    async def create_catalog_material(catalog_id: str, payload: MaterialInput, user=Depends(require_admin)):
+        return await save_catalog_item(catalog_id, None, payload, user)
+
+    @router.put("/material-catalogs/{catalog_id}/materials/{item_id}")
+    async def update_catalog_material(catalog_id: str, item_id: str, payload: MaterialInput, user=Depends(require_admin)):
+        return await save_catalog_item(catalog_id, item_id, payload, user)
+
+    @router.post("/material-catalogs/{catalog_id}/materials/batch")
+    async def create_catalog_materials_batch(catalog_id: str, payload: MaterialBatchInput, user=Depends(require_admin)):
+        if not ObjectId.is_valid(catalog_id):
+            raise HTTPException(404, "Catálogo não encontrado")
+        database = get_db()
+        catalog = await database.material_catalogs.find_one({"_id": ObjectId(catalog_id)})
+        if not catalog:
+            raise HTTPException(404, "Catálogo não encontrado")
+        items = list(catalog.get("materials", []))
+        if len(items) + len(payload.items) > MAX_ROWS:
+            raise HTTPException(400, f"Limite de {MAX_ROWS} sub-itens por catálogo")
+
+        existing_names = {name_key(item["name"]) for item in items}
+        incoming_names = set()
+        created = []
+        for index, material in enumerate(payload.items, 1):
+            data = material.model_dump()
+            key = name_key(data["name"])
+            if key in existing_names:
+                raise HTTPException(409, f"Linha {index}: {data['name']} já está cadastrado neste catálogo")
+            if key in incoming_names:
+                raise HTTPException(409, f"Linha {index}: {data['name']} está repetido na montagem")
+            incoming_names.add(key)
+            created.append({"id": str(uuid.uuid4()), **data})
+
+        await save_catalog_materials(database, catalog, [*items, *created])
+        await audit(
+            user,
+            "catalog.batch_create",
+            "material_catalog",
+            catalog_id,
+            {"count": len(created), "item_ids": [item["id"] for item in created]},
+        )
+        return {"created": len(created), "items": created}
+
+    async def save_catalog_item(catalog_id, item_id, payload, user):
+        if not ObjectId.is_valid(catalog_id):
+            raise HTTPException(404, "Catálogo não encontrado")
+        database = get_db()
+        catalog = await database.material_catalogs.find_one({"_id": ObjectId(catalog_id)})
+        if not catalog:
+            raise HTTPException(404, "Catálogo não encontrado")
+        items = list(catalog.get("materials", []))
+        if item_id and not any(item["id"] == item_id for item in items):
+            raise HTTPException(404, "Sub-item não encontrado")
+        if any(name_key(item["name"]) == name_key(payload.name) and item["id"] != item_id for item in items):
+            raise HTTPException(409, "Já existe este sub-item no catálogo")
+        item = {"id": item_id or str(uuid.uuid4()), **payload.model_dump()}
+        if item_id:
+            items = [item if old["id"] == item_id else old for old in items]
+        else:
+            if len(items) >= MAX_ROWS:
+                raise HTTPException(400, f"Limite de {MAX_ROWS} sub-itens por catálogo")
+            items.append(item)
+        await save_catalog_materials(database, catalog, items)
+        await audit(
+            user,
+            "catalog.item_update" if item_id else "catalog.item_create",
+            "material_catalog",
+            catalog_id,
+            {"item_id": item["id"], "name": item["name"]},
+        )
+        return item
+
     @router.get("/materials/template")
     async def template(format: Literal["xlsx", "csv"] = "xlsx", user=Depends(require_admin)):
         examples = [["Drop", "Drop Externo", "Metro", 500], ["Drop", "Drop Interno", "Metro", 100], ["HGU", "HGU Wi-Fi", "Unidade", 1]]
@@ -318,6 +617,53 @@ def register_material_routes(router, get_db, require_admin, audit):
         await audit(user, "material.update" if item_id else "material.create", "category", category_id, {"item_id": item["id"], "name": item["name"]})
         return item
 
+
+
+async def validate_catalog_kit(database, entries):
+    """Validate quantities against standalone material catalogs."""
+    if not isinstance(entries, list) or not 1 <= len(entries) <= 500:
+        raise HTTPException(400, "Selecione de 1 a 500 sub-itens para o kit")
+    ids = {str(entry.get("category_id", "")) for entry in entries if isinstance(entry, dict)}
+    if any(not ObjectId.is_valid(value) for value in ids):
+        raise HTTPException(400, "Catálogo inválido no kit")
+    catalogs = await database.material_catalogs.find(
+        {"_id": {"$in": [ObjectId(value) for value in ids]}}
+    ).to_list(200)
+    by_id = {str(catalog["_id"]): catalog for catalog in catalogs}
+    snapshots, seen = [], set()
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise HTTPException(400, "Sub-item inválido no kit")
+        catalog = by_id.get(str(entry.get("category_id", "")))
+        item = next(
+            (
+                material
+                for material in (catalog or {}).get("materials", [])
+                if material["id"] == entry.get("item_id") and material.get("active", True)
+            ),
+            None,
+        )
+        if not item:
+            raise HTTPException(400, "Um dos sub-itens está indisponível. Atualize o catálogo")
+        key = (str(catalog["_id"]), item["id"])
+        if key in seen:
+            raise HTTPException(400, "O mesmo sub-item não pode aparecer duas vezes no kit")
+        seen.add(key)
+        quantity = entry.get("quantity")
+        step = item["multiple"] if item["measure"] == "metro" else 1
+        if type(quantity) is not int or not 1 <= quantity <= MAX_QUANTITY or quantity % step:
+            raise HTTPException(400, f"{item['name']}: informe um inteiro positivo em múltiplos de {step}")
+        snapshots.append({
+            "category_id": str(catalog["_id"]),
+            "category_name": catalog["name"],
+            "item_id": item["id"],
+            "name": item["name"],
+            "measure": item["measure"],
+            "multiple": step,
+            "quantity": quantity,
+        })
+    return snapshots, catalogs
 
 async def validate_kit(database, entries):
     if not isinstance(entries, list) or not 1 <= len(entries) <= 500:
