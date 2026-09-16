@@ -11,7 +11,7 @@ from mongomock_motor import AsyncMongoMockClient
 from openpyxl import Workbook
 import server
 from database import _matches
-from materials import HEADERS, save_materials
+from materials import HEADERS, CATALOG_HEADERS, save_materials
 
 @pytest.fixture
 def ctx(monkeypatch):
@@ -45,6 +45,29 @@ def item(api,c,name='Drop Externo',measure='metro',multiple=500):
     return r.json()
 
 def entry(c,i,q): return {'category_id':c['id'],'item_id':i['id'],'quantity':q}
+
+def catalog(api):
+    r=api.post('/api/material-catalogs'); assert r.status_code==200,r.text
+    return r.json()
+
+def catalog_item(api,c,name='HGU5 CV',measure='unidade',multiple=1):
+    r=api.post(f"/api/material-catalogs/{c['id']}/materials",json={'name':name,'measure':measure,'multiple':multiple})
+    assert r.status_code==200,r.text
+    return r.json()
+
+def upload_catalog(api,catalog_id,rows,preview=True,fmt='csv'):
+    if fmt == 'xlsx':
+        wb=Workbook()
+        for row in [CATALOG_HEADERS,*rows]: wb.active.append(row)
+        stream=io.BytesIO(); wb.save(stream); raw=stream.getvalue()
+    else:
+        stream=io.StringIO(); csv.writer(stream,delimiter=';').writerows([CATALOG_HEADERS,*rows]); raw=stream.getvalue().encode('utf-8-sig')
+    return api.post(
+        f"/api/material-catalogs/{catalog_id}/import",
+        data={'preview':str(preview).lower()},
+        files={'file':('catalog.'+fmt,raw)},
+    )
+
 def submit(api,items=None,**extra):
     data={'kind':'kit','material_items':items,'requester':{'matricula':'QA01','email':'qa@example.com','empresa':'QA'},'field_values':{},**extra}
     return api.post('/api/tickets',data={'payload':json.dumps(data)})
@@ -231,24 +254,38 @@ def test_batch_material_creation_requires_admin(ctx):
     assert r.status_code == 403
 
 
+def test_standalone_catalog_import_never_creates_category(ctx):
+    api,db,_=ctx
+    catalog_doc=catalog(api)
+    assert catalog_doc['name']=='Catálogo 1'
+    preview=upload_catalog(api,catalog_doc['id'],[['HGU5 CV','Unidade',1],['Drop 500','Metro',500]],True).json()
+    assert preview['valid'] and preview['items_created']==2
+    assert asyncio.run(db.categories.count_documents({}))==0
+    saved=upload_catalog(api,catalog_doc['id'],[['HGU5 CV','Unidade',1],['Drop 500','Metro',500]],False).json()
+    assert saved['items_created']==2
+    assert asyncio.run(db.categories.count_documents({}))==0
+    catalogs=api.get('/api/material-catalogs').json()
+    assert len(catalogs)==1 and len(catalogs[0]['materials'])==2
+
+
 def test_category_kit_accepts_only_linked_catalogs(ctx):
     api, db, _ = ctx
-    catalog = cat(api, 'Catálogo HGU')
-    linked_item = item(api, catalog, 'HGU5 CV', 'unidade', 1)
-    other_catalog = cat(api, 'Catálogo Drop')
-    other_item = item(api, other_catalog, 'Drop 500', 'metro', 500)
+    linked_catalog = catalog(api)
+    linked_item = catalog_item(api, linked_catalog, 'HGU5 CV', 'unidade', 1)
+    other_catalog = catalog(api)
+    other_item = catalog_item(api, other_catalog, 'Drop 500', 'metro', 500)
 
     service = cat(
         api,
         'Instalação HGU',
         kit_enabled=True,
-        kit_catalog_ids=[catalog['id']],
+        kit_catalog_ids=[linked_catalog['id']],
         lead_time_hours=8,
     )
 
     ok = submit(
         api,
-        [entry(catalog, linked_item, 3)],
+        [entry(linked_catalog, linked_item, 3)],
         kind='standard',
         category_id=service['id'],
     )
@@ -258,7 +295,7 @@ def test_category_kit_accepts_only_linked_catalogs(ctx):
     assert saved['category_name'] == 'Instalação HGU'
     assert saved['category_ids'] == [service['id']]
     assert saved['kind'] == 'standard'
-    assert saved['material_items'][0]['category_id'] == catalog['id']
+    assert saved['material_items'][0]['category_id'] == linked_catalog['id']
     assert saved['material_items'][0]['quantity'] == 3
 
     denied = submit(
@@ -277,7 +314,7 @@ def test_category_kit_accepts_only_linked_catalogs(ctx):
 
 def test_category_kit_requires_existing_catalog_with_active_items(ctx):
     api, _, _ = ctx
-    empty_catalog = cat(api, 'Catálogo vazio')
+    empty_catalog = catalog(api)
     response = api.post('/api/categories', json={
         'name': 'Serviço Kit',
         'kit_enabled': True,
@@ -293,3 +330,4 @@ def test_category_kit_requires_existing_catalog_with_active_items(ctx):
     })
     assert no_link.status_code == 400
     assert 'vincule' in no_link.text.lower()
+
