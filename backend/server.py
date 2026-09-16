@@ -588,12 +588,16 @@ async def send_email(to: str, subject: str, html: str) -> Optional[str]:
 def format_field_value(value) -> str:
     if isinstance(value, bool):
         return "Sim" if value else "Não"
-    if isinstance(value, dict) and ("parent" in value or "child" in value):
+    if isinstance(value, dict) and ("parent" in value or "child" in value or "children" in value):
         parent = str(value.get("parent") or "").strip()
-        child = str(value.get("child") or "").strip()
-        if parent and child:
-            return f"{parent} → {child}"
-        return parent or child or "—"
+        children = value.get("children")
+        if not isinstance(children, list):
+            legacy_child = str(value.get("child") or "").strip()
+            children = [legacy_child] if legacy_child else []
+        clean_children = [str(item).strip() for item in children if str(item).strip()]
+        if parent and clean_children:
+            return f"{parent} → {', '.join(clean_children)}"
+        return parent or ", ".join(clean_children) or "—"
     return str(value if value not in (None, "") else "—")
 
 
@@ -1395,12 +1399,21 @@ async def create_ticket(
         if field_type == "dependent_select":
             pair = value if isinstance(value, dict) else {}
             selected_parent = str(pair.get("parent") or "").strip()
-            selected_child = str(pair.get("child") or "").strip()
+            raw_children = pair.get("children")
+            if isinstance(raw_children, list):
+                selected_children = [
+                    str(child).strip()
+                    for child in raw_children
+                    if str(child).strip()
+                ]
+            else:
+                legacy_child = str(pair.get("child") or "").strip()
+                selected_children = [legacy_child] if legacy_child else []
 
-            if field.get("required") and (not selected_parent or not selected_child):
+            if field.get("required") and (not selected_parent or not selected_children):
                 raise HTTPException(status_code=400, detail=f"Campo obrigatório: {label or 'campo'}")
 
-            if selected_parent or selected_child:
+            if selected_parent or selected_children:
                 allowed_pairs = {
                     str(item.get("parent") or "").strip(): [
                         str(child).strip()
@@ -1410,16 +1423,23 @@ async def create_ticket(
                     for item in (field.get("dependent_options") or [])
                     if str(item.get("parent") or "").strip()
                 }
+                allowed_children = allowed_pairs.get(selected_parent, [])
                 if (
                     not selected_parent
-                    or not selected_child
+                    or not selected_children
                     or selected_parent not in allowed_pairs
-                    or selected_child not in allowed_pairs[selected_parent]
+                    or any(child not in allowed_children for child in selected_children)
                 ):
                     raise HTTPException(
                         status_code=400,
                         detail=f"Seleção inválida no campo: {label or 'campo'}",
                     )
+
+                # Normaliza o formato novo e remove seleções duplicadas mantendo a ordem.
+                field_values[label] = {
+                    "parent": selected_parent,
+                    "children": list(dict.fromkeys(selected_children)),
+                }
             continue
 
         if not field.get("required"):
