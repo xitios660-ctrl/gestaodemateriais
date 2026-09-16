@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { motion, useMotionValueEvent, useReducedMotion, useScroll } from "framer-motion";
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { VivoMascot } from "@/components/VivoMascot";
 
 export function SiteHeader() {
   const navigate = useNavigate();
@@ -30,15 +31,6 @@ export function SiteHeader() {
         <div className="absolute -right-8 top-5 h-14 w-[22rem] rounded-[999px] border border-purple-400/15 rotate-[3deg]" />
         <div className="absolute right-10 top-3 h-2.5 w-2.5 rounded-full bg-fuchsia-300/20 shadow-[0_0_16px_rgba(217,70,239,0.16)]" />
         <div className="absolute right-28 bottom-3 h-1.5 w-1.5 rounded-full bg-purple-400/20 shadow-[0_0_12px_rgba(168,85,247,0.14)]" />
-
-        <div className="absolute right-16 sm:right-40 top-1/2 -translate-y-1/2 opacity-[0.07]">
-          <img
-            src="/vivo-logo.jpeg"
-            alt=""
-            className="h-11 w-11 sm:h-12 sm:w-12 rounded-2xl object-cover shadow-[0_0_26px_rgba(168,85,247,0.18)]"
-          />
-        </div>
-
         <div className="absolute inset-y-0 right-0 w-1/2 bg-gradient-to-l from-purple-50/25 via-white/10 to-transparent" />
       </div>
 
@@ -59,16 +51,26 @@ export function SiteHeader() {
           </Link>
         </div>
 
-        <Button
-          variant="ghost"
-          data-testid="nav-track-button"
-          aria-label="Consultar chamado"
-          onClick={() => navigate("/acompanhar")}
-          className="text-slate-600 hover:text-purple-700 hover:bg-purple-50 gap-2 rounded-xl shrink-0"
-        >
-          <Search className="w-4 h-4" />
-          <span className="hidden sm:inline">Consultar chamado</span>
-        </Button>
+        <div className="flex items-center gap-2.5 shrink-0">
+          <motion.div
+            aria-hidden="true"
+            whileHover={reduceMotion ? undefined : { y: -1, scale: 1.05 }}
+            className="hidden xs:flex sm:flex h-8 w-7 items-center justify-center"
+          >
+            <VivoMascot className="h-7 w-6 drop-shadow-[0_4px_10px_rgba(102,0,153,0.16)]" />
+          </motion.div>
+          <span aria-hidden="true" className="hidden sm:block h-7 w-px bg-purple-100" />
+          <Button
+            variant="ghost"
+            data-testid="nav-track-button"
+            aria-label="Consultar chamado"
+            onClick={() => navigate("/acompanhar")}
+            className="text-slate-600 hover:text-purple-700 hover:bg-purple-50 gap-2 rounded-xl shrink-0 px-2 sm:px-3"
+          >
+            <Search className="w-5 h-5 sm:w-4 sm:h-4" />
+            <span className="hidden sm:inline">Consultar chamado</span>
+          </Button>
+        </div>
       </div>
     </motion.header>
   );
