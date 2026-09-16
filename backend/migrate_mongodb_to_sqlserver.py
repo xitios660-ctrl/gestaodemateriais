@@ -66,8 +66,10 @@ async def migrate(apply: bool, replace: bool):
                 await destination[name].delete_many({})
 
         copied_total = 0
+        expected_counts = {}
         for name in COLLECTION_NAMES:
             docs = await source[name].find({}).to_list(length=None)
+            expected_counts[name] = len(docs)
             copied = 0
             for doc in docs:
                 await destination[name].insert_one(deepcopy(doc))
@@ -80,7 +82,18 @@ async def migrate(apply: bool, replace: bool):
         await destination.tickets.create_index("ticket_number", unique=True)
         await destination.password_reset_tokens.create_index("token_hash", unique=True)
 
-        print(f"\nMigração concluída: {copied_total} documento(s) copiado(s).")
+        mismatches = []
+        for name, expected in expected_counts.items():
+            actual = await destination[name].count_documents({})
+            if actual != expected:
+                mismatches.append(f"{name}: esperado={expected}, SQL={actual}")
+
+        if mismatches:
+            raise RuntimeError(
+                "A verificação pós-migração encontrou divergências: " + "; ".join(mismatches)
+            )
+
+        print(f"\nMigração concluída e verificada: {copied_total} documento(s) copiado(s).")
         print("O MongoDB não foi alterado. Para usar SQL Server no app, mude DB_ENGINE=sqlserver.")
     finally:
         mongo_client.close()
