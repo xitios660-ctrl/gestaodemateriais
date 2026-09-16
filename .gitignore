@@ -51,6 +51,7 @@ __pycache__/
 *pyc*
 venv/
 .venv/
+.venv-sqlserver/
 
 # Development tools
 chainlit.md
