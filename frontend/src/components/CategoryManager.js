@@ -29,7 +29,11 @@ const FIELD_TYPES = [
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-const EMPTY = { name: "", icon: "Laptop", description: "", lead_time_hours: 24, owners: [], fields: [], template_columns: [], template_filename: "", active: true };
+const EMPTY = {
+  name: "", icon: "Laptop", description: "", lead_time_hours: 24,
+  owners: [], fields: [], template_columns: [], template_filename: "",
+  kit_enabled: false, kit_catalog_ids: [], active: true,
+};
 
 export default function CategoryManager({ categories, onChange }) {
   const [editing, setEditing] = useState(null);
@@ -37,8 +41,11 @@ export default function CategoryManager({ categories, onChange }) {
   const [ownerInput, setOwnerInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const catalogCandidates = categories.filter((category) =>
+    (category.materials || []).some((item) => item.active !== false)
+  );
 
-  const openNew = () => { setEditing("new"); setForm({ ...EMPTY, fields: [] }); setOwnerInput(""); };
+  const openNew = () => { setEditing("new"); setForm({ ...EMPTY, fields: [], kit_catalog_ids: [] }); setOwnerInput(""); };
   const openEdit = (c) => {
     setEditing(c.id);
     setForm({
@@ -56,6 +63,8 @@ export default function CategoryManager({ categories, onChange }) {
       })),
       template_columns: [...(c.template_columns || [])],
       template_filename: c.template_filename || "",
+      kit_enabled: c.kit_enabled === true,
+      kit_catalog_ids: [...(c.kit_catalog_ids || [])],
       active: c.active !== false,
     });
     setOwnerInput("");
@@ -123,6 +132,15 @@ export default function CategoryManager({ categories, onChange }) {
     }));
   };
 
+  const toggleKitCatalog = (catalogId, checked) => {
+    setForm((current) => ({
+      ...current,
+      kit_catalog_ids: checked
+        ? Array.from(new Set([...(current.kit_catalog_ids || []), catalogId]))
+        : (current.kit_catalog_ids || []).filter((id) => id !== catalogId),
+    }));
+  };
+
   const addOwner = () => {
     const e = ownerInput.trim().toLowerCase();
     if (!e) return;
@@ -136,6 +154,10 @@ export default function CategoryManager({ categories, onChange }) {
     if (!form.name.trim()) { toast.error("Nome da categoria é obrigatório"); return; }
     if (!Number(form.lead_time_hours) || Number(form.lead_time_hours) < 1) {
       toast.error("O prazo de atendimento deve ser maior que zero");
+      return;
+    }
+    if (form.kit_enabled && !(form.kit_catalog_ids || []).length) {
+      toast.error("Selecione ao menos um catálogo para a Solicitação de Kit");
       return;
     }
     const invalidField = form.fields.find((field) => !field.label?.trim());
@@ -167,6 +189,8 @@ export default function CategoryManager({ categories, onChange }) {
         ...form,
         lead_time_hours: Number(form.lead_time_hours) || 24,
         template_columns: (form.template_columns || []).filter(Boolean),
+        kit_enabled: !!form.kit_enabled,
+        kit_catalog_ids: [...(form.kit_catalog_ids || [])],
         fields: form.fields.map((f) => ({
           ...f,
           label: f.label.trim(),
@@ -245,6 +269,7 @@ export default function CategoryManager({ categories, onChange }) {
                   <span className="inline-flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> {c.lead_time_hours}h</span>
                   <span className="inline-flex items-center gap-1"><Mail className="w-3.5 h-3.5" /> {(c.owners || []).length} responsável(is)</span>
                   <span>{(c.fields || []).length} campo(s)</span><span>{(c.materials || []).length} sub-item(ns)</span>
+                  {c.kit_enabled && <span className="rounded-full bg-purple-50 text-purple-700 px-2 py-0.5 font-semibold">Kit · {(c.kit_catalog_ids || []).length} catálogo(s)</span>}
                 </div>
               </div>
             </div>
@@ -302,6 +327,64 @@ export default function CategoryManager({ categories, onChange }) {
                 <Switch checked={form.active} onCheckedChange={(v) => setForm({ ...form, active: v })} data-testid="category-active-switch" />
                 <span className="text-sm text-slate-600">Categoria ativa (visível no portal)</span>
               </div>
+            </div>
+
+            <div className={`rounded-2xl border p-4 transition-colors ${form.kit_enabled ? "border-purple-200 bg-purple-50/60" : "border-slate-200 bg-slate-50/60"}`}>
+              <div className="flex items-start gap-3">
+                <Switch
+                  checked={!!form.kit_enabled}
+                  onCheckedChange={(value) => setForm((current) => ({ ...current, kit_enabled: value }))}
+                  data-testid="category-kit-switch"
+                />
+                <div className="min-w-0">
+                  <Label className="text-sm font-semibold text-slate-800">Habilitar Solicitação de Kit</Label>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Quando ativado, esta categoria usa os catálogos de materiais selecionados abaixo. O solicitante poderá preencher vários itens no mesmo chamado.
+                  </p>
+                </div>
+              </div>
+
+              {form.kit_enabled && (
+                <div className="mt-4 pt-4 border-t border-purple-100">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <div>
+                      <Label className="text-xs font-semibold text-slate-700">Catálogos vinculados *</Label>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Selecione um ou mais catálogos já cadastrados com sub-itens disponíveis.</p>
+                    </div>
+                    <span className="text-[11px] font-semibold text-purple-700 bg-white border border-purple-100 rounded-full px-2.5 py-1">
+                      {(form.kit_catalog_ids || []).length} selecionado(s)
+                    </span>
+                  </div>
+
+                  {catalogCandidates.length ? (
+                    <div className="max-h-52 overflow-y-auto rounded-xl border border-purple-100 bg-white divide-y divide-slate-100">
+                      {catalogCandidates.map((catalog) => {
+                        const checked = (form.kit_catalog_ids || []).includes(catalog.id);
+                        return (
+                          <label key={catalog.id} className={`flex items-center gap-3 px-3 py-3 cursor-pointer transition-colors ${checked ? "bg-purple-50" : "hover:bg-slate-50"}`}>
+                            <Checkbox
+                              data-testid={`kit-catalog-${catalog.id}`}
+                              checked={checked}
+                              onCheckedChange={(value) => toggleKitCatalog(catalog.id, value === true)}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-sm font-medium text-slate-800 truncate">{catalog.name}</span>
+                              <span className="block text-[11px] text-slate-400 mt-0.5">
+                                {(catalog.materials || []).filter((item) => item.active !== false).length} sub-item(ns) disponível(is)
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-purple-200 bg-white px-4 py-5 text-center">
+                      <p className="text-sm font-medium text-slate-700">Nenhum catálogo disponível</p>
+                      <p className="text-xs text-slate-400 mt-1">Cadastre sub-itens no Catálogo de materiais e volte para vincular.</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div>
