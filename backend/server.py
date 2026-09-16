@@ -253,6 +253,27 @@ async def validate_category_ids(category_ids: List[str]) -> List[str]:
     return normalized
 
 
+async def validate_kit_catalog_ids(catalog_ids: List[str]) -> List[str]:
+    """Validate links using the existing categories collection; no migration/new collection."""
+    normalized = await validate_category_ids(catalog_ids)
+    if not normalized:
+        return []
+    object_ids = [ObjectId(value) for value in normalized]
+    docs = await db.categories.find({"_id": {"$in": object_ids}}).to_list(50)
+    usable = {
+        str(doc["_id"])
+        for doc in docs
+        if any(item.get("active", True) for item in (doc.get("materials") or []))
+    }
+    unavailable = [value for value in normalized if value not in usable]
+    if unavailable:
+        raise HTTPException(
+            status_code=400,
+            detail="Selecione somente catálogos que possuam ao menos um sub-item disponível",
+        )
+    return normalized
+
+
 def scope_match(user: dict) -> dict:
     """Empty for admins; category filter for scoped responsáveis."""
     if user.get("role") == "admin":
@@ -879,6 +900,8 @@ class CategoryInput(BaseModel):
     fields: List[CustomField] = Field(default_factory=list, max_length=100)
     template_columns: List[str] = Field(default_factory=list, max_length=100)
     template_filename: Optional[str] = Field(default=None, max_length=180)
+    kit_enabled: bool = False
+    kit_catalog_ids: List[str] = Field(default_factory=list, max_length=50)
     active: bool = True
 
 
@@ -1272,9 +1295,13 @@ async def create_category(payload: CategoryInput, user: dict = Depends(require_a
     })
     if duplicate:
         raise HTTPException(status_code=409, detail="Já existe uma categoria com este nome")
+    kit_catalog_ids = await validate_kit_catalog_ids(payload.kit_catalog_ids)
+    if payload.kit_enabled and not kit_catalog_ids:
+        raise HTTPException(status_code=400, detail="Vincule ao menos um catálogo para habilitar Solicitação de Kit")
     doc = payload.model_dump()
     doc["name"] = normalized_name
     doc["owners"] = [str(owner).lower() for owner in payload.owners]
+    doc["kit_catalog_ids"] = kit_catalog_ids
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
     res = await db.categories.insert_one(doc)
     doc["_id"] = res.inserted_id
@@ -1295,9 +1322,13 @@ async def update_category(cat_id: str, payload: CategoryInput, user: dict = Depe
     })
     if duplicate:
         raise HTTPException(status_code=409, detail="Já existe uma categoria com este nome")
+    kit_catalog_ids = await validate_kit_catalog_ids(payload.kit_catalog_ids)
+    if payload.kit_enabled and not kit_catalog_ids:
+        raise HTTPException(status_code=400, detail="Vincule ao menos um catálogo para habilitar Solicitação de Kit")
     doc = payload.model_dump()
     doc["name"] = normalized_name
     doc["owners"] = [str(owner).lower() for owner in payload.owners]
+    doc["kit_catalog_ids"] = kit_catalog_ids
     res = await db.categories.update_one({"_id": oid}, {"$set": doc})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
@@ -1319,6 +1350,11 @@ async def delete_category(cat_id: str, user: dict = Depends(require_admin)):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
     await db.users.update_many({}, {"$pull": {"categories": cat_id}})
+    await db.categories.update_many({"kit_catalog_ids": cat_id}, {"$pull": {"kit_catalog_ids": cat_id}})
+    await db.categories.update_many(
+        {"kit_enabled": True, "kit_catalog_ids": []},
+        {"$set": {"kit_enabled": False}},
+    )
     await write_audit(user, "category.delete", "category", cat_id, {
         "name": target.get("name", ""),
     })
@@ -1371,10 +1407,20 @@ async def create_ticket(
         category = await db.categories.find_one({"_id": as_object_id(category_id, "Categoria não encontrada"), "active": True})
         if not category:
             raise HTTPException(status_code=404, detail="Categoria não encontrada")
-        if any(item["category_id"] != category_id for item in material_items):
-            raise HTTPException(400, "Para combinar categorias diferentes, use a montagem de kit")
-        if any(item.get("active", True) for item in category.get("materials", [])) and not material_items:
-            raise HTTPException(400, "Selecione pelo menos um sub-item")
+
+        if category.get("kit_enabled"):
+            allowed_catalog_ids = set(category.get("kit_catalog_ids") or [])
+            if not allowed_catalog_ids:
+                raise HTTPException(400, "Esta categoria está sem catálogo de kit vinculado")
+            if not material_items:
+                raise HTTPException(400, "Selecione pelo menos um sub-item para montar o kit")
+            if any(item["category_id"] not in allowed_catalog_ids for item in material_items):
+                raise HTTPException(400, "Um dos materiais não pertence aos catálogos vinculados a esta categoria")
+        else:
+            if any(item["category_id"] != category_id for item in material_items):
+                raise HTTPException(400, "Para combinar categorias diferentes, use a montagem de kit")
+            if any(item.get("active", True) for item in category.get("materials", [])) and not material_items:
+                raise HTTPException(400, "Selecione pelo menos um sub-item")
 
     requester = data.get("requester", {})
     if not isinstance(requester, dict):
