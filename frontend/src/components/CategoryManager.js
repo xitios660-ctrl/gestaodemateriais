@@ -35,15 +35,14 @@ const EMPTY = {
   kit_enabled: false, kit_catalog_ids: [], active: true,
 };
 
-export default function CategoryManager({ categories, onChange }) {
+export default function CategoryManager({ categories, catalogs = [], onChange }) {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [ownerInput, setOwnerInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const catalogCandidates = categories.filter((category) =>
-    category.active !== false &&
-    (category.materials || []).some((item) => item.active !== false)
+  const catalogCandidates = catalogs.filter((catalog) =>
+    (catalog.materials || []).some((item) => item.active !== false)
   );
 
   const openNew = () => { setEditing("new"); setForm({ ...EMPTY, fields: [], kit_catalog_ids: [] }); setOwnerInput(""); };
@@ -233,7 +232,7 @@ export default function CategoryManager({ categories, onChange }) {
 
   return (
     <div>
-      <MaterialCatalogAdmin categories={categories} onChange={onChange} onCreateCategory={openNew} />
+      <MaterialCatalogAdmin catalogs={catalogs} onChange={onChange} />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
         <p className="text-sm text-slate-500">{categories.length} categoria(s) cadastrada(s)</p>
         <Button data-testid="admin-category-create-button" onClick={openNew} className="bg-[#660099] hover:bg-[#520080] gap-2 shadow-md shadow-purple-500/15 w-full sm:w-auto">
@@ -269,7 +268,7 @@ export default function CategoryManager({ categories, onChange }) {
                 <div className="flex flex-wrap gap-3 mt-3 text-xs text-slate-500">
                   <span className="inline-flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> {c.lead_time_hours}h</span>
                   <span className="inline-flex items-center gap-1"><Mail className="w-3.5 h-3.5" /> {(c.owners || []).length} responsável(is)</span>
-                  <span>{(c.fields || []).length} campo(s)</span><span>{(c.materials || []).length} sub-item(ns)</span>
+                  <span>{(c.fields || []).length} campo(s)</span>
                   {c.kit_enabled && <span className="rounded-full bg-purple-50 text-purple-700 px-2 py-0.5 font-semibold">Kit · {(c.kit_catalog_ids || []).length} catálogo(s)</span>}
                 </div>
               </div>
@@ -354,7 +353,7 @@ export default function CategoryManager({ categories, onChange }) {
                   <div className="flex items-center justify-between gap-3 mb-2">
                     <div>
                       <Label className="text-xs font-semibold text-slate-700">Catálogos vinculados *</Label>
-                      <p className="text-[11px] text-slate-400 mt-0.5">Selecione um ou mais catálogos já cadastrados com sub-itens disponíveis.</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Escolha os catálogos de materiais que aparecerão para o solicitante preencher as quantidades.</p>
                     </div>
                     <span className="text-[11px] font-semibold text-purple-700 bg-white border border-purple-100 rounded-full px-2.5 py-1">
                       {(form.kit_catalog_ids || []).length} selecionado(s)
