@@ -6,6 +6,8 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
     envVars:
+      - key: DB_ENGINE
+        value: mongodb
       - key: DB_NAME
         value: gestao_materiais
       - key: JWT_SECRET
