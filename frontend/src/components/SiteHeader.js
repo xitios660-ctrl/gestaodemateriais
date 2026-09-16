@@ -30,6 +30,15 @@ export function SiteHeader() {
         <div className="absolute -right-8 top-5 h-14 w-[22rem] rounded-[999px] border border-purple-400/15 rotate-[3deg]" />
         <div className="absolute right-10 top-3 h-2.5 w-2.5 rounded-full bg-fuchsia-300/20 shadow-[0_0_16px_rgba(217,70,239,0.16)]" />
         <div className="absolute right-28 bottom-3 h-1.5 w-1.5 rounded-full bg-purple-400/20 shadow-[0_0_12px_rgba(168,85,247,0.14)]" />
+
+        <div className="absolute right-16 sm:right-40 top-1/2 -translate-y-1/2 opacity-[0.07]">
+          <img
+            src="/vivo-logo.jpeg"
+            alt=""
+            className="h-11 w-11 sm:h-12 sm:w-12 rounded-2xl object-cover shadow-[0_0_26px_rgba(168,85,247,0.18)]"
+          />
+        </div>
+
         <div className="absolute inset-y-0 right-0 w-1/2 bg-gradient-to-l from-purple-50/25 via-white/10 to-transparent" />
       </div>
 
