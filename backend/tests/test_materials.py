@@ -229,3 +229,67 @@ def test_batch_material_creation_requires_admin(ctx):
         json={'items': [{'name': 'HGU5 CV', 'measure': 'unidade'}]},
     )
     assert r.status_code == 403
+
+
+def test_category_kit_accepts_only_linked_catalogs(ctx):
+    api, db, _ = ctx
+    catalog = cat(api, 'Catálogo HGU')
+    linked_item = item(api, catalog, 'HGU5 CV', 'unidade', 1)
+    other_catalog = cat(api, 'Catálogo Drop')
+    other_item = item(api, other_catalog, 'Drop 500', 'metro', 500)
+
+    service = cat(
+        api,
+        'Instalação HGU',
+        kit_enabled=True,
+        kit_catalog_ids=[catalog['id']],
+        lead_time_hours=8,
+    )
+
+    ok = submit(
+        api,
+        [entry(catalog, linked_item, 3)],
+        kind='standard',
+        category_id=service['id'],
+    )
+    assert ok.status_code == 200, ok.text
+    saved = ok.json()
+    assert saved['category_id'] == service['id']
+    assert saved['category_name'] == 'Instalação HGU'
+    assert saved['category_ids'] == [service['id']]
+    assert saved['kind'] == 'standard'
+    assert saved['material_items'][0]['category_id'] == catalog['id']
+    assert saved['material_items'][0]['quantity'] == 3
+
+    denied = submit(
+        api,
+        [entry(other_catalog, other_item, 500)],
+        kind='standard',
+        category_id=service['id'],
+    )
+    assert denied.status_code == 400
+    assert 'catálogos vinculados' in denied.text
+
+    empty = submit(api, [], kind='standard', category_id=service['id'])
+    assert empty.status_code == 400
+    assert asyncio.run(db.tickets.count_documents({})) == 1
+
+
+def test_category_kit_requires_existing_catalog_with_active_items(ctx):
+    api, _, _ = ctx
+    empty_catalog = cat(api, 'Catálogo vazio')
+    response = api.post('/api/categories', json={
+        'name': 'Serviço Kit',
+        'kit_enabled': True,
+        'kit_catalog_ids': [empty_catalog['id']],
+    })
+    assert response.status_code == 400
+    assert 'catálogos' in response.text.lower()
+
+    no_link = api.post('/api/categories', json={
+        'name': 'Serviço sem vínculo',
+        'kit_enabled': True,
+        'kit_catalog_ids': [],
+    })
+    assert no_link.status_code == 400
+    assert 'vincule' in no_link.text.lower()
