@@ -1296,7 +1296,7 @@ async def create_category(payload: CategoryInput, user: dict = Depends(require_a
     })
     if duplicate:
         raise HTTPException(status_code=409, detail="Já existe uma categoria com este nome")
-    kit_catalog_ids = await validate_kit_catalog_ids(payload.kit_catalog_ids)
+    kit_catalog_ids = await validate_kit_catalog_ids(payload.kit_catalog_ids) if payload.kit_enabled else []
     if payload.kit_enabled and not kit_catalog_ids:
         raise HTTPException(status_code=400, detail="Vincule ao menos um catálogo para habilitar Solicitação de Kit")
     doc = payload.model_dump()
@@ -1323,7 +1323,7 @@ async def update_category(cat_id: str, payload: CategoryInput, user: dict = Depe
     })
     if duplicate:
         raise HTTPException(status_code=409, detail="Já existe uma categoria com este nome")
-    kit_catalog_ids = await validate_kit_catalog_ids(payload.kit_catalog_ids)
+    kit_catalog_ids = await validate_kit_catalog_ids(payload.kit_catalog_ids) if payload.kit_enabled else []
     if payload.kit_enabled and not kit_catalog_ids:
         raise HTTPException(status_code=400, detail="Vincule ao menos um catálogo para habilitar Solicitação de Kit")
     doc = payload.model_dump()
