@@ -42,6 +42,7 @@ export default function CategoryManager({ categories, onChange }) {
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const catalogCandidates = categories.filter((category) =>
+    category.active !== false &&
     (category.materials || []).some((item) => item.active !== false)
   );
 
