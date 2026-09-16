@@ -263,7 +263,8 @@ async def validate_kit_catalog_ids(catalog_ids: List[str]) -> List[str]:
     usable = {
         str(doc["_id"])
         for doc in docs
-        if any(item.get("active", True) for item in (doc.get("materials") or []))
+        if doc.get("active", True)
+        and any(item.get("active", True) for item in (doc.get("materials") or []))
     }
     unavailable = [value for value in normalized if value not in usable]
     if unavailable:
