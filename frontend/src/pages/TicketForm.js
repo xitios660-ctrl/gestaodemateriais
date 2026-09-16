@@ -73,6 +73,8 @@ export default function TicketForm() {
     fields: selectedCategories.flatMap(c => (c.fields || []).map(f => ({...f, id: `${c.id}:${f.id}`, label: `${c.name} — ${f.label}`}))),
     template_columns: [],
   } : baseCategory;
+  const categoryKitEnabled = !isKit && baseCategory?.kit_enabled === true;
+  const linkedCatalogCount = categoryKitEnabled ? (baseCategory?.kit_catalog_ids || []).length : 0;
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -83,31 +85,46 @@ export default function TicketForm() {
   const [errors, setErrors] = useState({});
   const [success, setSuccess] = useState(null);
 
-  const loadCategory = () => {
+  const loadCategory = async () => {
     setLoading(true);
     setLoadFailed(false);
     setQuantities({}); setValues({}); setFile(null); setSuccess(null); setErrors({}); setReviewing(false);
-    api
-      .get(isKit ? '/categories' : `/categories/${categoryId}`)
-      .then(({ data }) => {
-        if (isKit) {
-          setCatalog(data.filter(c => (c.materials || []).length > 0));
-          return;
-        }
-        setCategory(data);
+    try {
+      if (isKit) {
+        const { data } = await api.get('/categories');
+        setCatalog(data.filter((item) => (item.materials || []).length > 0));
+        return;
+      }
+
+      const { data } = await api.get(`/categories/${categoryId}`);
+      setCategory(data);
+
+      if (data.kit_enabled) {
+        const linkedIds = new Set(data.kit_catalog_ids || []);
+        const response = await api.get('/categories');
+        setCatalog(
+          response.data.filter(
+            (item) => linkedIds.has(item.id) && (item.materials || []).length > 0
+          )
+        );
+      } else {
         setCatalog([data]);
-        const init = {};
-        (data.fields || []).forEach((f) => {
-          init[f.id] = f.type === "checkbox"
-            ? false
-            : f.type === "dependent_select"
-              ? { parent: "", children: [] }
-              : "";
-        });
-        setValues(init);
-      })
-      .catch(() => setLoadFailed(true))
-      .finally(() => setLoading(false));
+      }
+
+      const init = {};
+      (data.fields || []).forEach((field) => {
+        init[field.id] = field.type === "checkbox"
+          ? false
+          : field.type === "dependent_select"
+            ? { parent: "", children: [] }
+            : "";
+      });
+      setValues(init);
+    } catch {
+      setLoadFailed(true);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { loadCategory(); }, [categoryId]);
@@ -202,7 +219,13 @@ export default function TicketForm() {
       const missing = field.type === "checkbox" ? val !== true : !String(val || "").trim();
       if (missing) next[`field.${field.id}`] = "Este campo é obrigatório";
     }
-    if ((isKit || catalog.some(c => (c.materials || []).length)) && !materialItems.length) next.materials = 'Selecione pelo menos um sub-item para o kit';
+    if (categoryKitEnabled && linkedCatalogCount === 0) {
+      next.materials = 'Esta categoria está sem catálogo de kit vinculado. Avise o administrador.';
+    } else if (categoryKitEnabled && catalog.length < linkedCatalogCount) {
+      next.materials = 'Um dos catálogos vinculados está indisponível. Avise o administrador.';
+    } else if ((isKit || categoryKitEnabled || catalog.some(c => (c.materials || []).length)) && !materialItems.length) {
+      next.materials = 'Selecione pelo menos um sub-item para o kit';
+    }
     if (materialItems.length > 500) next.materials = 'Selecione até 500 sub-itens por chamado';
     if (catalog.some(c => (c.materials || []).some(i => !validQuantity(quantities[materialKey(c.id, i.id)] ?? 0, i)))) next.materials = 'Revise as quantidades. Utilize inteiros positivos e os múltiplos indicados';
     setErrors(next);
@@ -394,8 +417,30 @@ export default function TicketForm() {
           </motion.div>
 
           <form onSubmit={handleSubmit} noValidate className="space-y-5 sm:space-y-6">
-            {(isKit || catalog.some(c => (c.materials || []).length)) && <KitSelector categories={catalog} quantities={quantities} onChange={updater => {setQuantities(updater); setErrors(current => ({...current, materials: ""}));}} disabled={submitting} error={errors.materials} />}
-            {!isKit && catalog.some(c => (c.materials || []).length) && <Button type="button" variant="outline" onClick={() => navigate('/kit')}>Montar um kit com outras categorias</Button>}
+            {(isKit || categoryKitEnabled || catalog.some(c => (c.materials || []).length)) && (
+              <KitSelector
+                categories={catalog}
+                quantities={quantities}
+                onChange={(updater) => {
+                  setQuantities(updater);
+                  setErrors((current) => ({ ...current, materials: "" }));
+                }}
+                disabled={submitting}
+                error={errors.materials}
+                title={categoryKitEnabled ? 'Monte os materiais deste chamado' : undefined}
+                description={categoryKitEnabled
+                  ? 'Os itens abaixo vêm dos catálogos vinculados a esta categoria. Preencha vários de uma vez; Unidade conta de 1 em 1 e Metro respeita exatamente o múltiplo cadastrado.'
+                  : undefined}
+              />
+            )}
+            {categoryKitEnabled && linkedCatalogCount > 0 && catalog.length < linkedCatalogCount && (
+              <div role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                Um dos catálogos vinculados está indisponível. O envio ficará bloqueado até a configuração ser corrigida.
+              </div>
+            )}
+            {!isKit && !categoryKitEnabled && catalog.some(c => (c.materials || []).length) && (
+              <Button type="button" variant="outline" onClick={() => navigate('/kit')}>Montar um kit com outras categorias</Button>
+            )}
             <motion.section variants={fadeUp} className="premium-surface rounded-2xl p-5 sm:p-6">
               <div className="flex items-center gap-2 mb-5">
                 <div className="w-8 h-8 rounded-xl bg-purple-50 flex items-center justify-center"><UserRound className="w-4 h-4 text-purple-600" /></div>
