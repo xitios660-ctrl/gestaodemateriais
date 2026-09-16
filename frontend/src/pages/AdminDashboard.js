@@ -27,11 +27,15 @@ function fmt(dt) {
 
 function formatFieldValue(value) {
   if (typeof value === "boolean") return value ? "Sim" : "Não";
-  if (value && typeof value === "object" && ("parent" in value || "child" in value)) {
+  if (value && typeof value === "object" && ("parent" in value || "child" in value || "children" in value)) {
     const parent = String(value.parent || "").trim();
-    const child = String(value.child || "").trim();
-    if (parent && child) return `${parent} → ${child}`;
-    return parent || child || "—";
+    const children = Array.isArray(value.children)
+      ? value.children.filter(Boolean)
+      : value.child
+        ? [value.child]
+        : [];
+    if (parent && children.length) return `${parent} → ${children.join(", ")}`;
+    return parent || children.join(", ") || "—";
   }
   return String(value || "—");
 }
