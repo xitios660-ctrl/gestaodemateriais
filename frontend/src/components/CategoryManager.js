@@ -24,7 +24,7 @@ const FIELD_TYPES = [
   { value: "number", label: "Número" },
   { value: "date", label: "Data" },
   { value: "checkbox", label: "Caixa de seleção" },
-  { value: "dependent_select", label: "Categoria + Subcategoria (dependente)" },
+  { value: "dependent_select", label: "Categoria + opções para marcar (cascata)" },
 ];
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -48,7 +48,7 @@ export default function CategoryManager({ categories, onChange }) {
         ...f,
         id: f.id || uid(),
         parent_label: f.parent_label || "Categoria",
-        child_label: f.child_label || "Subcategoria",
+        child_label: f.child_label || "Opções para marcar",
         dependent_options: (f.dependent_options || []).map((item) => ({
           parent: item.parent || "",
           children: [...(item.children || [])],
@@ -71,7 +71,7 @@ export default function CategoryManager({ categories, onChange }) {
         required: false,
         options: [],
         parent_label: "Categoria",
-        child_label: "Subcategoria",
+        child_label: "Opções para marcar",
         dependent_options: [],
       }],
     }));
@@ -174,7 +174,7 @@ export default function CategoryManager({ categories, onChange }) {
             ? (f.options || []).map((option) => option.trim()).filter(Boolean)
             : [],
           parent_label: f.type === "dependent_select" ? (f.parent_label || "Categoria").trim() : null,
-          child_label: f.type === "dependent_select" ? (f.child_label || "Subcategoria").trim() : null,
+          child_label: f.type === "dependent_select" ? (f.child_label || "Opções para marcar").trim() : null,
           dependent_options: f.type === "dependent_select"
             ? (f.dependent_options || []).map((row) => ({
                 parent: row.parent.trim(),
@@ -366,7 +366,7 @@ export default function CategoryManager({ categories, onChange }) {
                           type: v,
                           ...(v === "dependent_select" ? {
                             parent_label: f.parent_label || "Categoria",
-                            child_label: f.child_label || "Subcategoria",
+                            child_label: f.child_label || "Opções para marcar",
                             dependent_options: f.dependent_options || [],
                           } : {}),
                         })}
@@ -393,7 +393,7 @@ export default function CategoryManager({ categories, onChange }) {
                         <div>
                           <p className="text-xs font-bold text-purple-700">Campo dependente em cascata</p>
                           <p className="text-[11px] text-slate-400 mt-0.5">
-                            Cadastre cada categoria pai e, abaixo dela, as subcategorias que devem aparecer.
+                            Cadastre cada categoria e as opções que devem aparecer para o solicitante marcar.
                           </p>
                         </div>
 
@@ -414,7 +414,7 @@ export default function CategoryManager({ categories, onChange }) {
                               data-testid={`dependent-child-label-${f.id}`}
                               value={f.child_label || ""}
                               onChange={(e) => updateField(f.id, { child_label: e.target.value })}
-                              placeholder="Ex: Subcategoria"
+                              placeholder="Ex: Opções para marcar"
                               className="mt-1 bg-white h-9"
                             />
                           </div>
@@ -435,7 +435,7 @@ export default function CategoryManager({ categories, onChange }) {
                                   />
                                 </div>
                                 <div>
-                                  <Label className="text-[11px] text-slate-500">Subcategorias</Label>
+                                  <Label className="text-[11px] text-slate-500">Opções para marcar</Label>
                                   <Input
                                     data-testid={`dependent-children-${f.id}-${index}`}
                                     value={(row.children || []).join(", ")}
@@ -471,7 +471,7 @@ export default function CategoryManager({ categories, onChange }) {
                         </Button>
 
                         <div className="rounded-lg bg-purple-50 px-3 py-2 text-[11px] text-purple-700">
-                          Exemplo: HGU → HGU 5, HGU 6 · Drop → Drop pré con 300, Drop externo
+                          Exemplo: HGU → marcar HGU 5, HGU 6 · Drop → marcar Drop 100, Drop 200, Drop 300
                         </div>
                       </div>
                     )}
