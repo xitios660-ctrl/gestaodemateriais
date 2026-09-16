@@ -55,7 +55,7 @@ export function SiteHeader() {
           <motion.div
             aria-hidden="true"
             whileHover={reduceMotion ? undefined : { y: -1, scale: 1.05 }}
-            className="hidden xs:flex sm:flex h-8 w-7 items-center justify-center"
+            className="flex h-7 w-6 sm:h-8 sm:w-7 items-center justify-center"
           >
             <VivoMascot className="h-7 w-6 drop-shadow-[0_4px_10px_rgba(102,0,153,0.16)]" />
           </motion.div>
