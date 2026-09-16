@@ -49,6 +49,10 @@ class MaterialInput(BaseModel):
         return self
 
 
+class MaterialBatchInput(BaseModel):
+    items: list[MaterialInput] = Field(min_length=1, max_length=200)
+
+
 def spreadsheet_rows(raw, filename):
     ext = filename.rsplit(".", 1)[-1].lower()
     if ext == "csv":
@@ -258,6 +262,38 @@ def register_material_routes(router, get_db, require_admin, audit):
     @router.put("/categories/{category_id}/materials/{item_id}")
     async def update_material(category_id: str, item_id: str, payload: MaterialInput, user=Depends(require_admin)):
         return await save_one(category_id, item_id, payload, user)
+
+    @router.post("/categories/{category_id}/materials/batch")
+    async def create_materials_batch(category_id: str, payload: MaterialBatchInput, user=Depends(require_admin)):
+        if not ObjectId.is_valid(category_id):
+            raise HTTPException(404, "Categoria não encontrada")
+        database = get_db()
+        category = await database.categories.find_one({"_id": ObjectId(category_id)})
+        if not category:
+            raise HTTPException(404, "Categoria não encontrada")
+        items = list(category.get("materials", []))
+        if len(items) + len(payload.items) > MAX_ROWS:
+            raise HTTPException(400, f"Limite de {MAX_ROWS} sub-itens por categoria")
+
+        existing_names = {name_key(item["name"]) for item in items}
+        incoming_names = set()
+        created = []
+        for index, material in enumerate(payload.items, 1):
+            data = material.model_dump()
+            key = name_key(data["name"])
+            if key in existing_names:
+                raise HTTPException(409, f"Linha {index}: {data['name']} já está cadastrado nesta categoria")
+            if key in incoming_names:
+                raise HTTPException(409, f"Linha {index}: {data['name']} está repetido na montagem")
+            incoming_names.add(key)
+            created.append({"id": str(uuid.uuid4()), **data})
+
+        await save_materials(database, category, [*items, *created])
+        await audit(user, "material.batch_create", "category", category_id, {
+            "count": len(created),
+            "item_ids": [item["id"] for item in created],
+        })
+        return {"created": len(created), "items": created}
 
     async def save_one(category_id, item_id, payload, user):
         if not ObjectId.is_valid(category_id):
