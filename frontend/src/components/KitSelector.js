@@ -4,7 +4,15 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { formatQuantity, materialKey, materialStep, selectedMaterials, snapQuantity, validQuantity } from '@/lib/materials';
 
-export default function KitSelector({ categories, quantities, onChange, disabled = false, error }) {
+export default function KitSelector({
+  categories,
+  quantities,
+  onChange,
+  disabled = false,
+  error,
+  title = 'Monte seu kit de materiais',
+  description = 'Escolha vários sub-itens. As quantidades seguem a medida e o múltiplo de cada material.',
+}) {
   const [search, setSearch] = useState('');
   const [limit, setLimit] = useState(80);
   const [notice, setNotice] = useState('');
@@ -24,7 +32,7 @@ export default function KitSelector({ categories, quantities, onChange, disabled
   };
   const selected = selectedMaterials(categories, quantities).length;
   return <section className="premium-surface rounded-2xl p-4 sm:p-6" data-testid="kit-selector">
-    <div className="flex gap-3 items-start"><span className="rounded-xl bg-purple-100 p-2 text-purple-700"><Package size={20}/></span><div><h2 className="font-bold text-slate-900">Monte seu kit de materiais</h2><p className="text-sm text-slate-500 mt-1">Escolha vários sub-itens. As quantidades seguem a medida e o múltiplo de cada material.</p></div></div>
+    <div className="flex gap-3 items-start"><span className="rounded-xl bg-purple-100 p-2 text-purple-700"><Package size={20}/></span><div><h2 className="font-bold text-slate-900">{title}</h2><p className="text-sm text-slate-500 mt-1">{description}</p></div></div>
     <div className="relative mt-5"><Search className="absolute left-3 top-3 text-slate-400" size={16}/><Input aria-label="Buscar material ou categoria" value={search} onChange={e => {setSearch(e.target.value); setLimit(80);}} placeholder="Buscar material ou categoria..." className="pl-9 bg-white"/></div>
     <p className="mt-2 text-xs text-slate-500">{selected} selecionado(s) · {filtered.length} resultado(s). Digite a metragem total. Valores fora do múltiplo são ajustados para cima ao sair do campo.</p>
     {error && <p role="alert" className="text-sm text-rose-600 mt-3">{error}</p>}
