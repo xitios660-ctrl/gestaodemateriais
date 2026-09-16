@@ -38,7 +38,7 @@ from starlette.responses import Response as StarletteResponse, FileResponse, JSO
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict, EmailStr
 from bson import ObjectId
 from database import create_database
-from materials import register_material_routes, validate_kit
+from materials import register_material_routes, validate_kit, validate_catalog_kit
 
 # ----------------------------------------------------------------------------
 # Setup
@@ -254,23 +254,25 @@ async def validate_category_ids(category_ids: List[str]) -> List[str]:
 
 
 async def validate_kit_catalog_ids(catalog_ids: List[str]) -> List[str]:
-    """Validate links using the existing categories collection; no migration/new collection."""
-    normalized = await validate_category_ids(catalog_ids)
+    """Validate links against standalone material catalogs."""
+    normalized = list(dict.fromkeys(str(value) for value in (catalog_ids or [])))
     if not normalized:
         return []
+    if any(not ObjectId.is_valid(value) for value in normalized):
+        raise HTTPException(status_code=400, detail="Um dos catálogos informados é inválido")
     object_ids = [ObjectId(value) for value in normalized]
-    docs = await db.categories.find({"_id": {"$in": object_ids}}).to_list(50)
-    usable = {
-        str(doc["_id"])
-        for doc in docs
-        if doc.get("active", True)
-        and any(item.get("active", True) for item in (doc.get("materials") or []))
-    }
-    unavailable = [value for value in normalized if value not in usable]
+    docs = await db.material_catalogs.find({"_id": {"$in": object_ids}}).to_list(50)
+    by_id = {str(doc["_id"]): doc for doc in docs}
+    unavailable = [
+        value
+        for value in normalized
+        if value not in by_id
+        or not any(item.get("active", True) for item in (by_id[value].get("materials") or []))
+    ]
     if unavailable:
         raise HTTPException(
             status_code=400,
-            detail="Selecione somente catálogos que possuam ao menos um sub-item disponível",
+            detail="Selecione somente catálogos existentes que possuam ao menos um sub-item disponível",
         )
     return normalized
 
@@ -1351,11 +1353,6 @@ async def delete_category(cat_id: str, user: dict = Depends(require_admin)):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
     await db.users.update_many({}, {"$pull": {"categories": cat_id}})
-    await db.categories.update_many({"kit_catalog_ids": cat_id}, {"$pull": {"kit_catalog_ids": cat_id}})
-    await db.categories.update_many(
-        {"kit_enabled": True, "kit_catalog_ids": []},
-        {"$set": {"kit_enabled": False}},
-    )
     await write_audit(user, "category.delete", "category", cat_id, {
         "name": target.get("name", ""),
     })
@@ -1393,9 +1390,9 @@ async def create_ticket(
         raise HTTPException(400, "Dados da solicitação inválidos")
     kit_mode = data.get("kind") == "kit"
     material_items, kit_categories = [], []
-    if kit_mode or data.get("material_items"):
-        material_items, kit_categories = await validate_kit(db, data.get("material_items"))
+
     if kit_mode:
+        material_items, kit_categories = await validate_kit(db, data.get("material_items"))
         category = {
             "_id": kit_categories[0]["_id"], "name": "Kit de materiais", "icon": "Package",
             "lead_time_hours": max(int(c.get("lead_time_hours", 24)) for c in kit_categories),
@@ -1405,7 +1402,9 @@ async def create_ticket(
         category_id = str(data.get("category_id") or "").strip()
         if not category_id:
             raise HTTPException(status_code=400, detail="Categoria obrigatória")
-        category = await db.categories.find_one({"_id": as_object_id(category_id, "Categoria não encontrada"), "active": True})
+        category = await db.categories.find_one(
+            {"_id": as_object_id(category_id, "Categoria não encontrada"), "active": True}
+        )
         if not category:
             raise HTTPException(status_code=404, detail="Categoria não encontrada")
 
@@ -1413,15 +1412,15 @@ async def create_ticket(
             allowed_catalog_ids = set(category.get("kit_catalog_ids") or [])
             if not allowed_catalog_ids:
                 raise HTTPException(400, "Esta categoria está sem catálogo de kit vinculado")
-            if not material_items:
-                raise HTTPException(400, "Selecione pelo menos um sub-item para montar o kit")
+            material_items, _ = await validate_catalog_kit(db, data.get("material_items"))
             if any(item["category_id"] not in allowed_catalog_ids for item in material_items):
                 raise HTTPException(400, "Um dos materiais não pertence aos catálogos vinculados a esta categoria")
-        else:
+        elif data.get("material_items"):
+            material_items, _ = await validate_kit(db, data.get("material_items"))
             if any(item["category_id"] != category_id for item in material_items):
                 raise HTTPException(400, "Para combinar categorias diferentes, use a montagem de kit")
-            if any(item.get("active", True) for item in category.get("materials", [])) and not material_items:
-                raise HTTPException(400, "Selecione pelo menos um sub-item")
+        elif any(item.get("active", True) for item in category.get("materials", [])):
+            raise HTTPException(400, "Selecione pelo menos um sub-item")
 
     requester = data.get("requester", {})
     if not isinstance(requester, dict):
