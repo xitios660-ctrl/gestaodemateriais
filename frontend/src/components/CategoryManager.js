@@ -334,7 +334,11 @@ export default function CategoryManager({ categories, onChange }) {
               <div className="flex items-start gap-3">
                 <Switch
                   checked={!!form.kit_enabled}
-                  onCheckedChange={(value) => setForm((current) => ({ ...current, kit_enabled: value }))}
+                  onCheckedChange={(value) => setForm((current) => ({
+                    ...current,
+                    kit_enabled: value,
+                    kit_catalog_ids: value ? (current.kit_catalog_ids || []) : [],
+                  }))}
                   data-testid="category-kit-switch"
                 />
                 <div className="min-w-0">
