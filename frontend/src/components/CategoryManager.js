@@ -1,5 +1,4 @@
 import { useState } from "react";
-import MaterialCatalogAdmin from "@/components/MaterialCatalogAdmin";
 import { api, formatApiErrorDetail, ICON_OPTIONS } from "@/lib/api";
 import { CategoryIcon } from "@/lib/ui";
 import { Button } from "@/components/ui/button";
@@ -232,7 +231,6 @@ export default function CategoryManager({ categories, catalogs = [], onChange })
 
   return (
     <div>
-      <MaterialCatalogAdmin catalogs={catalogs} onChange={onChange} />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
         <p className="text-sm text-slate-500">{categories.length} categoria(s) cadastrada(s)</p>
         <Button data-testid="admin-category-create-button" onClick={openNew} className="bg-[#660099] hover:bg-[#520080] gap-2 shadow-md shadow-purple-500/15 w-full sm:w-auto">
