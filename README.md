@@ -2,7 +2,7 @@
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fxitios660-ctrl%2Fgestaodemateriais)
 
-Portal interno para abertura e gestão de chamados (Vivo). Stack: **React** (frontend) + **FastAPI** (backend) + **MongoDB**.
+Portal interno para abertura e gestão de chamados (Vivo). Stack: **React** (frontend) + **FastAPI** (backend) + **MongoDB** por padrão, com backend alternativo preparado para **SQL Server 2019+**.
 
 ## Estrutura
 
@@ -113,6 +113,90 @@ Abre em `http://localhost:3000`.
 - Respostas públicas de acompanhamento usam payload mínimo, sem dados internos do solicitante
 - Uploads limitados a 10MB e extensões permitidas; downloads usam `nosniff`
 - MongoDB: coleções `users`, `categories`, `tickets`, `counters`, `login_attempts`, `password_reset_tokens`, `password_reset_requests`
+
+
+
+## Banco alternativo: SQL Server 2019+
+
+O sistema continua usando **MongoDB por padrão**. A troca é feita somente pela variável `DB_ENGINE`, sem alterar as telas nem a lógica da API.
+
+### Ambientes
+
+MongoDB atual:
+
+```env
+DB_ENGINE=mongodb
+MONGO_URL=mongodb+srv://...
+DB_NAME=gestao_materiais
+```
+
+SQL Server 2019+:
+
+```env
+DB_ENGINE=sqlserver
+SQLSERVER_SERVER=servidor-ou-ip
+SQLSERVER_PORT=1433
+SQLSERVER_DATABASE=gestao_materiais
+SQLSERVER_USER=usuario
+SQLSERVER_PASSWORD=senha
+SQLSERVER_SCHEMA=dbo
+SQLSERVER_TABLE_PREFIX=gm_
+```
+
+O arquivo `backend/.env.sqlserver.example` contém o modelo completo. As credenciais reais devem ficar em `backend/.env` ou nas variáveis do provedor de hospedagem e nunca devem ser commitadas.
+
+### Virtualenv alternativo
+
+Para manter um ambiente Python separado para testes com SQL Server:
+
+Windows PowerShell:
+
+```powershell
+cd backend
+.\setup_sqlserver_venv.ps1
+.\.venv-sqlserver\Scripts\Activate.ps1
+```
+
+Linux/macOS:
+
+```bash
+cd backend
+sh setup_sqlserver_venv.sh
+source .venv-sqlserver/bin/activate
+```
+
+A pasta `.venv-sqlserver` é local e fica ignorada pelo Git.
+
+### Tabelas equivalentes
+
+O adaptador SQL Server cria uma tabela equivalente para cada coleção usada pela aplicação, incluindo:
+
+`gm_users`, `gm_categories`, `gm_material_catalogs`, `gm_tickets`, `gm_login_attempts`, `gm_rate_limits`, `gm_password_reset_tokens`, `gm_password_reset_requests`, `gm_audit_logs`, `gm_email_events`, `gm_counters` e `gm_system_settings`.
+
+Para preservar compatibilidade total com os documentos atuais, cada registro é armazenado como JSON válido em `NVARCHAR(MAX)`, mantendo o mesmo `_id` e a mesma estrutura utilizada pelo MongoDB. O script `backend/sql/sqlserver2019_schema.sql` pode ser executado manualmente, embora o backend também consiga criar as tabelas automaticamente.
+
+### Migrar MongoDB para SQL Server
+
+A migração é segura por padrão e começa em modo de simulação:
+
+```bash
+cd backend
+python migrate_mongodb_to_sqlserver.py
+```
+
+Para copiar os dados:
+
+```bash
+python migrate_mongodb_to_sqlserver.py --apply
+```
+
+Se o banco SQL já tiver dados, o script cancela a operação. Para limpar somente as tabelas da aplicação no destino e recopiá-las:
+
+```bash
+python migrate_mongodb_to_sqlserver.py --apply --replace
+```
+
+O script preserva o MongoDB, copia os IDs e documentos e compara a quantidade de registros de todas as tabelas ao final. Só depois disso você deve trocar `DB_ENGINE=sqlserver`.
 
 
 ## Deploy em produção
