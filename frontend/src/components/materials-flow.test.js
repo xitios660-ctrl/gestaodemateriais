@@ -50,18 +50,24 @@ test('kit stepper, input snapping, review and one consolidated request',async()=
   expect(document.body.textContent).toContain('CH-QA-0001');
 });
 
-test('Excel/CSV upload is previewed before confirmed multipart import',async()=>{
-  const preview={valid:true,categories_created:0,items_created:1,skipped:0,errors:[],entries:[{row:2,category:'Drop',name:'Interno',measure:'metro',multiple:100,action:'criar',category_active:true}]};
+test('standalone catalog Excel/CSV upload never asks for a category',async()=>{
+  const preview={valid:true,items_created:1,skipped:0,errors:[],entries:[{row:2,name:'Interno',measure:'metro',multiple:100,action:'criar'}]};
   api.post.mockResolvedValue({data:preview});
-  await act(async()=>root.render(<MaterialCatalogAdmin categories={cats} onChange={jest.fn()} onCreateCategory={jest.fn()}/>));
-  const upload=document.querySelector('input[type=file]');const file=new File(['Categoria Pai;Sub-item (Filho);Tipo de Medida;Múltiplo\nDrop;Interno;Metro;100'],'materiais.csv',{type:'text/csv'});
+  const onChange=jest.fn();
+  await act(async()=>root.render(<MaterialCatalogAdmin catalogs={cats} onChange={onChange}/>));
+  await click(button('Drop'));
+  const upload=document.querySelector('input[type=file]');
+  const file=new File(['Sub-item;Tipo de Medida (Unidade/Metro);Múltiplo\nInterno;Metro;100'],'materiais.csv',{type:'text/csv'});
   await act(async()=>{Object.defineProperty(upload,'files',{value:[file],configurable:true});upload.dispatchEvent(new Event('change',{bubbles:true}));});
   expect(api.post).toHaveBeenCalledTimes(1);
+  expect(api.post.mock.calls[0][0]).toBe('/material-catalogs/cat-drop/import');
   expect(api.post.mock.calls[0][1].get('preview')).toBe('true');
   expect(api.post.mock.calls[0][2].headers['Content-Type']).toBe('multipart/form-data');
   expect(document.body.textContent).toContain('Interno');
+  expect(document.body.textContent).toContain('Nenhuma categoria será criada');
   await click(button('Confirmar importação'));
   expect(api.post).toHaveBeenCalledTimes(2);
+  expect(api.post.mock.calls[1][0]).toBe('/material-catalogs/cat-drop/import');
   expect(api.post.mock.calls[1][1].get('preview')).toBe('false');
   expect(api.post.mock.calls[1][1].get('file').name).toBe('materiais.csv');
 });
@@ -81,7 +87,7 @@ test('linked category kit loads only configured catalogs and keeps the service c
   };
   api.get.mockImplementation((url)=>{
     if(url==='/categories/service-kit') return Promise.resolve({data:service});
-    if(url==='/categories') return Promise.resolve({data:cats});
+    if(url==='/material-catalogs') return Promise.resolve({data:cats});
     return Promise.reject(new Error('unexpected url'));
   });
   api.post.mockResolvedValue({data:{
