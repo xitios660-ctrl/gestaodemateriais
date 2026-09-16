@@ -308,6 +308,24 @@ async def get_all_admin_notification_emails() -> List[str]:
     ])
 
 
+async def get_ticket_notification_recipients(category: dict, kit_categories: Optional[List[dict]] = None, kit_mode: bool = False) -> List[str]:
+    """Notify the category Owners as promised by the admin UI, while preserving admin notifications."""
+    category_docs = list(kit_categories or []) if kit_mode else [category]
+    owner_emails = [
+        str(email or "").strip().lower()
+        for category_doc in category_docs
+        for email in (category_doc.get("owners") or [])
+        if email
+    ]
+    admin_emails = await get_all_admin_notification_emails()
+    return unique_recipient_emails([
+        *owner_emails,
+        *admin_emails,
+        PRIMARY_NOTIFICATION_EMAIL,
+        *DEFAULT_OWNERS,
+    ])
+
+
 async def get_ticket_notification_admin_email() -> str:
     """Return the admin account that most recently logged in to manage the panel."""
     target = await db.system_settings.find_one({"_id": "ticket_notification_admin"})
@@ -1545,8 +1563,13 @@ async def create_ticket(
     res = await db.tickets.insert_one(ticket)
     ticket["_id"] = res.inserted_id
 
-    owners = await get_all_admin_notification_emails()
+    owners = await get_ticket_notification_recipients(
+        category,
+        kit_categories=kit_categories,
+        kit_mode=kit_mode,
+    )
     if owners:
+        logger.info("Ticket %s: notificando %s responsável(is)/admin(s)", number, len(owners))
         background_tasks.add_task(notify_owners, dict(ticket), owners)
     background_tasks.add_task(send_ticket_opened_email, dict(ticket))
 
