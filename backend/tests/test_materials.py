@@ -175,3 +175,57 @@ def test_large_catalog_import_and_retry(ctx):
     assert result['valid'] and result['items_created']==5000
     retry=upload(api,rows,False).json()
     assert retry['items_created']==0 and retry['skipped']==5000
+
+
+def test_batch_material_creation_is_atomic(ctx):
+    api, db, _ = ctx
+    c = cat(api, 'HGU')
+    payload = {
+        'items': [
+            {'name': 'HGU5 CV', 'measure': 'unidade', 'multiple': 99, 'active': True},
+            {'name': 'HGU5 SV', 'measure': 'unidade', 'active': True},
+            {'name': 'Cabo Drop', 'measure': 'metro', 'multiple': 500, 'active': True},
+        ]
+    }
+    r = api.post(f"/api/categories/{c['id']}/materials/batch", json=payload)
+    assert r.status_code == 200, r.text
+    assert r.json()['created'] == 3
+    saved = api.get(f"/api/categories/{c['id']}").json()['materials']
+    assert [item['name'] for item in saved] == ['HGU5 CV', 'HGU5 SV', 'Cabo Drop']
+    assert saved[0]['multiple'] == 1
+    assert saved[2]['multiple'] == 500
+
+    before = asyncio.run(db.categories.find_one({'_id': ObjectId(c['id'])}))
+    duplicate = api.post(
+        f"/api/categories/{c['id']}/materials/batch",
+        json={'items': [
+            {'name': 'Novo', 'measure': 'unidade'},
+            {'name': ' novo ', 'measure': 'metro', 'multiple': 100},
+        ]},
+    )
+    assert duplicate.status_code == 409
+    after = asyncio.run(db.categories.find_one({'_id': ObjectId(c['id'])}))
+    assert after['materials'] == before['materials']
+
+    existing = api.post(
+        f"/api/categories/{c['id']}/materials/batch",
+        json={'items': [
+            {'name': 'Outro', 'measure': 'unidade'},
+            {'name': 'HGU5 CV', 'measure': 'unidade'},
+        ]},
+    )
+    assert existing.status_code == 409
+    final = asyncio.run(db.categories.find_one({'_id': ObjectId(c['id'])}))
+    assert final['materials'] == before['materials']
+
+
+def test_batch_material_creation_requires_admin(ctx):
+    api, _, _ = ctx
+    c = cat(api, 'HGU')
+    server.app.dependency_overrides.clear()
+    server.app.dependency_overrides[server.get_current_user] = lambda: {'role': 'responsavel', 'categories': [c['id']]}
+    r = api.post(
+        f"/api/categories/{c['id']}/materials/batch",
+        json={'items': [{'name': 'HGU5 CV', 'measure': 'unidade'}]},
+    )
+    assert r.status_code == 403
