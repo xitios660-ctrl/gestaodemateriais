@@ -4,8 +4,9 @@ import TicketForm from '@/pages/TicketForm';
 import MaterialCatalogAdmin from './MaterialCatalogAdmin';
 import {api} from '@/lib/api';
 
+let mockParams = {};
 jest.mock('@/lib/api',()=>({api:{get:jest.fn(),post:jest.fn(),put:jest.fn()},formatApiErrorDetail:()=> 'Erro'}));
-jest.mock('react-router-dom',()=>({useParams:()=>({}),useNavigate:()=>jest.fn()}), {virtual:true});
+jest.mock('react-router-dom',()=>({useParams:()=>mockParams,useNavigate:()=>jest.fn()}), {virtual:true});
 jest.mock('@/components/SiteHeader',()=>({SiteHeader:()=>null}));
 jest.mock('sonner',()=>({toast:{success:jest.fn(),error:jest.fn()}}));
 const cats=[{id:'cat-drop',name:'Drop',lead_time_hours:24,fields:[],materials:[{id:'drop',name:'Drop Externo',measure:'metro',multiple:500}]},{id:'cat-hgu',name:'HGU',lead_time_hours:48,fields:[],materials:[{id:'hgu',name:'HGU Wi-Fi',measure:'unidade',multiple:1}]}];
@@ -16,6 +17,7 @@ beforeEach(()=>{
   window.scrollTo=jest.fn();
   host=document.createElement('div');document.body.appendChild(host);root=createRoot(host);
   jest.clearAllMocks();
+  mockParams = {};
 });
 afterEach(async()=>{await act(async()=>root.unmount());host.remove();});
 const button=text=>[...document.querySelectorAll('button')].find(node=>node.textContent.includes(text));
@@ -62,4 +64,50 @@ test('Excel/CSV upload is previewed before confirmed multipart import',async()=>
   expect(api.post).toHaveBeenCalledTimes(2);
   expect(api.post.mock.calls[1][1].get('preview')).toBe('false');
   expect(api.post.mock.calls[1][1].get('file').name).toBe('materiais.csv');
+});
+
+
+test('linked category kit loads only configured catalogs and keeps the service category',async()=>{
+  mockParams = {categoryId:'service-kit'};
+  const service={
+    id:'service-kit',
+    name:'Instalação HGU',
+    icon:'Package',
+    lead_time_hours:8,
+    fields:[],
+    materials:[],
+    kit_enabled:true,
+    kit_catalog_ids:['cat-hgu'],
+  };
+  api.get.mockImplementation((url)=>{
+    if(url==='/categories/service-kit') return Promise.resolve({data:service});
+    if(url==='/categories') return Promise.resolve({data:cats});
+    return Promise.reject(new Error('unexpected url'));
+  });
+  api.post.mockResolvedValue({data:{
+    ticket_number:'CH-QA-0002',
+    lead_time_hours:8,
+    material_items:[{category_name:'HGU',name:'HGU Wi-Fi',measure:'unidade',quantity:2}],
+  }});
+
+  await act(async()=>root.render(<TicketForm/>));
+
+  expect(document.body.textContent).toContain('Monte os materiais deste chamado');
+  expect(document.body.textContent).toContain('HGU Wi-Fi');
+  expect(document.body.textContent).not.toContain('Drop Externo');
+
+  await click(document.querySelector('[aria-label="Aumentar HGU Wi-Fi"]'));
+  await click(document.querySelector('[aria-label="Aumentar HGU Wi-Fi"]'));
+  await fill('#requester-matricula','QA02');
+  await fill('#requester-empresa','Operações');
+  await fill('#requester-email','qa2@example.com');
+
+  await act(async()=>document.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  expect(document.body.textContent).toContain('Confirme sua solicitação');
+  await click(button('Confirmar e enviar chamado'));
+
+  const payload=JSON.parse(api.post.mock.calls[0][1].get('payload'));
+  expect(payload.kind).toBe('standard');
+  expect(payload.category_id).toBe('service-kit');
+  expect(payload.material_items).toEqual([{category_id:'cat-hgu',item_id:'hgu',quantity:2}]);
 });
