@@ -101,7 +101,7 @@ export default function TicketForm() {
 
       if (data.kit_enabled) {
         const linkedIds = new Set(data.kit_catalog_ids || []);
-        const response = await api.get('/categories');
+        const response = await api.get('/material-catalogs');
         setCatalog(
           response.data.filter(
             (item) => linkedIds.has(item.id) && (item.materials || []).length > 0
