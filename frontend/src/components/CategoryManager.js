@@ -1,4 +1,5 @@
 import { useState } from "react";
+import MaterialCatalogAdmin from "@/components/MaterialCatalogAdmin";
 import { api, formatApiErrorDetail, ICON_OPTIONS } from "@/lib/api";
 import { CategoryIcon } from "@/lib/ui";
 import { Button } from "@/components/ui/button";
@@ -207,6 +208,7 @@ export default function CategoryManager({ categories, onChange }) {
 
   return (
     <div>
+      <MaterialCatalogAdmin categories={categories} onChange={onChange} onCreateCategory={openNew} />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
         <p className="text-sm text-slate-500">{categories.length} categoria(s) cadastrada(s)</p>
         <Button data-testid="admin-category-create-button" onClick={openNew} className="bg-[#660099] hover:bg-[#520080] gap-2 shadow-md shadow-purple-500/15 w-full sm:w-auto">
@@ -242,7 +244,7 @@ export default function CategoryManager({ categories, onChange }) {
                 <div className="flex flex-wrap gap-3 mt-3 text-xs text-slate-500">
                   <span className="inline-flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> {c.lead_time_hours}h</span>
                   <span className="inline-flex items-center gap-1"><Mail className="w-3.5 h-3.5" /> {(c.owners || []).length} responsável(is)</span>
-                  <span>{(c.fields || []).length} campo(s)</span>
+                  <span>{(c.fields || []).length} campo(s)</span><span>{(c.materials || []).length} sub-item(ns)</span>
                 </div>
               </div>
             </div>

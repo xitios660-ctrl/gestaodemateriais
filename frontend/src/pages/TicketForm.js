@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { motion, useReducedMotion } from "framer-motion";
 import { api, formatApiErrorDetail } from "@/lib/api";
 import { CategoryIcon } from "@/lib/ui";
+import KitSelector from "@/components/KitSelector";
+import KitSummary from "@/components/KitSummary";
+import { selectedMaterials, validQuantity, materialKey } from "@/lib/materials";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { fadeUp, stagger } from "@/lib/motion";
 import { SiteHeader } from "@/components/SiteHeader";
 import { Button } from "@/components/ui/button";
@@ -54,7 +58,21 @@ export default function TicketForm() {
   const { categoryId } = useParams();
   const navigate = useNavigate();
   const reduceMotion = useReducedMotion();
-  const [category, setCategory] = useState(null);
+  const [baseCategory, setCategory] = useState(null);
+  const isKit = !categoryId;
+  const [catalog, setCatalog] = useState([]);
+  const [quantities, setQuantities] = useState({});
+  const [reviewing, setReviewing] = useState(false);
+  const submitLock = useRef(false);
+  const materialItems = useMemo(() => selectedMaterials(catalog, quantities), [catalog, quantities]);
+  const selectedCategories = catalog.filter(c => materialItems.some(i => i.category_id === c.id));
+  const category = isKit ? {
+    id: selectedCategories[0]?.id,
+    name: 'Kit de materiais', icon: 'Package',
+    lead_time_hours: selectedCategories.length ? Math.max(...selectedCategories.map(c => c.lead_time_hours)) : 24,
+    fields: selectedCategories.flatMap(c => (c.fields || []).map(f => ({...f, id: `${c.id}:${f.id}`, label: `${c.name} — ${f.label}`}))),
+    template_columns: [],
+  } : baseCategory;
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -68,10 +86,16 @@ export default function TicketForm() {
   const loadCategory = () => {
     setLoading(true);
     setLoadFailed(false);
+    setQuantities({}); setValues({}); setFile(null); setSuccess(null); setErrors({}); setReviewing(false);
     api
-      .get(`/categories/${categoryId}`)
+      .get(isKit ? '/categories' : `/categories/${categoryId}`)
       .then(({ data }) => {
+        if (isKit) {
+          setCatalog(data.filter(c => (c.materials || []).length > 0));
+          return;
+        }
         setCategory(data);
+        setCatalog([data]);
         const init = {};
         (data.fields || []).forEach((f) => {
           init[f.id] = f.type === "checkbox"
@@ -162,6 +186,9 @@ export default function TicketForm() {
       const missing = field.type === "checkbox" ? val !== true : !String(val || "").trim();
       if (missing) next[`field.${field.id}`] = "Este campo é obrigatório";
     }
+    if ((isKit || catalog.some(c => (c.materials || []).length)) && !materialItems.length) next.materials = 'Selecione pelo menos um sub-item para o kit';
+    if (materialItems.length > 500) next.materials = 'Selecione até 500 sub-itens por chamado';
+    if (catalog.some(c => (c.materials || []).some(i => !validQuantity(quantities[materialKey(c.id, i.id)] ?? 0, i)))) next.materials = 'Revise as quantidades. Utilize inteiros positivos e os múltiplos indicados';
     setErrors(next);
     const valid = Object.keys(next).length === 0;
     if (!valid) {
@@ -172,13 +199,13 @@ export default function TicketForm() {
     return valid;
   };
 
-  const downloadTemplate = async () => {
+  const downloadTemplate = async (templateCategory = category) => {
     try {
-      const resp = await api.get(`/categories/${category.id}/template`, { responseType: "blob" });
+      const resp = await api.get(`/categories/${templateCategory.id}/template`, { responseType: "blob" });
       const url = URL.createObjectURL(resp.data);
       const a = document.createElement("a");
       a.href = url;
-      a.download = category.template_filename || `modelo-${category.name}.xlsx`;
+      a.download = templateCategory.template_filename || `modelo-${templateCategory.name}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch {
@@ -204,10 +231,11 @@ export default function TicketForm() {
     }
   };
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e, confirmed = false) => {
     e.preventDefault();
-    if (submitting || !validate()) return;
-
+    if (submitting || submitLock.current || !validate()) return;
+    if (materialItems.length && !confirmed) { setReviewing(true); return; }
+    submitLock.current = true;
     setSubmitting(true);
     try {
       const fieldValues = {};
@@ -220,6 +248,8 @@ export default function TicketForm() {
           empresa: requester.empresa.trim(),
         },
         field_values: fieldValues,
+        kind: isKit ? 'kit' : 'standard',
+        material_items: materialItems.map(({category_id, item_id, quantity}) => ({category_id, item_id, quantity})),
       };
       const form = new FormData();
       form.append("payload", JSON.stringify(payload));
@@ -228,10 +258,12 @@ export default function TicketForm() {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setSuccess(data);
+      setReviewing(false);
       window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
     } catch (err) {
       toast.error(formatApiErrorDetail(err.response?.data?.detail));
     } finally {
+      submitLock.current = false;
       setSubmitting(false);
     }
   };
@@ -297,6 +329,7 @@ export default function TicketForm() {
               </div>
             </div>
 
+            <div className="mt-5 text-left"><KitSummary items={success.material_items} /></div>
             <div className="mt-6 flex flex-col sm:flex-row gap-2.5">
               <Button
                 variant="outline"
@@ -326,7 +359,7 @@ export default function TicketForm() {
   return (
     <div className="min-h-screen grain-bg">
       <SiteHeader />
-      <main className="max-w-2xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
+      <main className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
         <button data-testid="back-button" onClick={() => navigate("/")} className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-purple-700 transition-colors mb-6 rounded-lg">
           <ArrowLeft className="w-4 h-4" /> Voltar às categorias
         </button>
@@ -345,6 +378,8 @@ export default function TicketForm() {
           </motion.div>
 
           <form onSubmit={handleSubmit} noValidate className="space-y-5 sm:space-y-6">
+            {(isKit || catalog.some(c => (c.materials || []).length)) && <KitSelector categories={catalog} quantities={quantities} onChange={updater => {setQuantities(updater); setErrors(current => ({...current, materials: ""}));}} disabled={submitting} error={errors.materials} />}
+            {!isKit && catalog.some(c => (c.materials || []).length) && <Button type="button" variant="outline" onClick={() => navigate('/kit')}>Montar um kit com outras categorias</Button>}
             <motion.section variants={fadeUp} className="premium-surface rounded-2xl p-5 sm:p-6">
               <div className="flex items-center gap-2 mb-5">
                 <div className="w-8 h-8 rounded-xl bg-purple-50 flex items-center justify-center"><UserRound className="w-4 h-4 text-purple-600" /></div>
@@ -512,11 +547,12 @@ export default function TicketForm() {
                   );
                 })}
 
+                {isKit && selectedCategories.filter(c => c.template_columns?.length).map(c => <div key={c.id} className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm"><p>Modelo de {c.name}</p><Button type="button" variant="outline" className="mt-2" onClick={() => downloadTemplate(c)}>Baixar modelo Excel</Button></div>)}
                 {(category.template_columns || []).length > 0 && (
                   <div data-testid="template-download-box" className="bg-amber-50/80 border border-amber-200 rounded-2xl p-4">
                     <p className="text-sm font-semibold text-amber-900 flex items-center gap-2"><FileSpreadsheet className="w-4 h-4" /> Modelo padrão</p>
                     <p className="text-xs text-amber-700 mt-1 leading-relaxed">Baixe a planilha, preencha as colunas exigidas e anexe o arquivo preenchido.</p>
-                    <Button type="button" data-testid="download-template-button" onClick={downloadTemplate} variant="outline" className="mt-3 border-amber-300 text-amber-900 hover:bg-amber-100 gap-2 h-9">
+                    <Button type="button" data-testid="download-template-button" onClick={() => downloadTemplate(category)} variant="outline" className="mt-3 border-amber-300 text-amber-900 hover:bg-amber-100 gap-2 h-9">
                       <Download className="w-4 h-4" /> Baixar modelo Excel
                     </Button>
                   </div>
@@ -559,6 +595,7 @@ export default function TicketForm() {
               </div>
             </motion.section>
 
+            <KitSummary items={materialItems} />
             <motion.div variants={fadeUp}>
               <Button
                 type="submit"
@@ -566,11 +603,20 @@ export default function TicketForm() {
                 disabled={submitting}
                 className="w-full h-12 bg-[#660099] hover:bg-[#520080] text-base font-semibold gap-2 shadow-lg shadow-purple-500/20"
               >
-                {submitting ? <><Loader2 className="w-5 h-5 animate-spin" /> Enviando...</> : "Enviar chamado"}
+                {submitting ? <><Loader2 className="w-5 h-5 animate-spin" /> Enviando...</> : materialItems.length ? "Revisar kit e enviar" : "Enviar chamado"}
               </Button>
               <p className="text-center text-[11px] text-slate-400 mt-2">Evite clicar novamente durante o envio. O botão fica bloqueado até a conclusão.</p>
             </motion.div>
           </form>
+          <Dialog open={reviewing} onOpenChange={open => {if (!submitting) setReviewing(open);}}>
+            <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader><DialogTitle>Confirme sua solicitação</DialogTitle><DialogDescription>Confira os materiais e quantidades. O kit completo será enviado em um único chamado.</DialogDescription></DialogHeader>
+              <p className="text-sm text-slate-600 break-words">{requester.empresa} · Matrícula {requester.matricula}<br/>{requester.email}</p>
+              <KitSummary items={materialItems} />
+              <p className="text-sm text-slate-500">Prazo estimado: {category.lead_time_hours} horas.{file && ` Anexo: ${file.name}`}</p>
+              <div className="flex gap-2 justify-end"><Button variant="outline" disabled={submitting} onClick={() => setReviewing(false)}>Voltar e ajustar</Button><Button disabled={submitting} onClick={() => handleSubmit({preventDefault() {}}, true)} className="bg-[#660099] gap-2">{submitting && <Loader2 size={16} className="animate-spin"/>}Confirmar e enviar chamado</Button></div>
+            </DialogContent>
+          </Dialog>
         </motion.div>
       </main>
     </div>

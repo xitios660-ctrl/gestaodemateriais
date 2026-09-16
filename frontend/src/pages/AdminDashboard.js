@@ -6,6 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 import { CategoryIcon, STATUS_STYLES, STATUS_LABELS } from "@/lib/ui";
 import { fadeUp, stagger, tap } from "@/lib/motion";
 import CategoryManager from "@/components/CategoryManager";
+import KitSummary from "@/components/KitSummary";
 import UserManager from "@/components/UserManager";
 import AuditManager from "@/components/AuditManager";
 import { Button } from "@/components/ui/button";
@@ -738,6 +739,7 @@ export default function AdminDashboard() {
                   <p className="text-sm text-slate-700">Empresa: <strong>{selected.requester?.empresa}</strong></p>
                 </section>
 
+                <KitSummary items={selected.material_items} />
                 <section>
                   <p className="text-xs font-bold uppercase tracking-wider text-purple-600 mb-2">Detalhes</p>
                   <div className="grid gap-2">

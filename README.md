@@ -147,3 +147,53 @@ A branch de evolução inclui GitHub Actions para validar automaticamente:
 - bloqueio de path traversal no storage local.
 
 Isso reduz a chance de uma alteração visual ou de segurança chegar ao deploy quebrando o sistema.
+
+## Catálogo de materiais e kits
+
+Em **Admin → Categorias → Catálogo de materiais**, use **Cadastro manual** para
+selecionar/criar a categoria pai e cadastrar ou editar seus sub-itens. Cada
+sub-item define Unidade (contagem inteira) ou Metro (múltiplo inteiro obrigatório).
+Desative o sub-item para impedir novos pedidos sem alterar chamados antigos.
+
+**Importar Excel/CSV** aceita `.xlsx` (primeira aba) ou `.csv` com quatro colunas:
+
+| Categoria Pai | Sub-item (Filho) | Tipo de Medida (Unidade/Metro) | Múltiplo |
+| --- | --- | --- | --- |
+| Drop | Drop Externo | Metro | 500 |
+| Drop | Drop Interno | Metro | 100 |
+| HGU | HGU Wi-Fi | Unidade | 1 |
+
+Os botões **Modelo Excel** e **Modelo CSV** geram exemplos para preenchimento.
+Limites: 5 MB, 5.000 linhas por arquivo, 5.000 sub-itens por categoria e 200
+categorias (limite do portal atual). CSV aceita UTF-8 ou Windows-1252 e
+separadores vírgula, ponto e vírgula ou tabulação. Fórmulas não são executadas.
+
+A prévia valida todas as linhas antes da confirmação. Uma linha inválida bloqueia
+a importação inteira. Sub-itens iguais são reconhecidos e mantidos; regras
+conflitantes devem ser editadas manualmente. Os formulários, responsáveis,
+prazos e anexos de categorias existentes são preservados. Uma interrupção durante
+a gravação pode salvar parte das categorias; reenviar o arquivo reconhece os
+itens salvos. Edições simultâneas são detectadas para evitar sobrescrever o catálogo.
+
+Depois de cadastrar materiais, o portal mostra **Montar kit de materiais** (`/kit`).
+Também é possível selecionar vários sub-itens no formulário de uma categoria.
+O kit combina até 500 sub-itens em um chamado, mantém os campos das categorias
+selecionadas e usa o maior prazo delas. Os controles avançam no múltiplo configurado;
+um valor digitado fora do múltiplo é ajustado para cima ao sair do campo. O resumo
+separa unidades de metros e exige confirmação antes do envio.
+
+O servidor revalida IDs, disponibilidade, duplicação e quantidades, e armazena uma
+cópia dos nomes e regras no chamado. O resumo aparece no painel, no relatório CSV
+e na notificação administrativa. O rastreamento público continua sem expor os
+itens ou dados pessoais. Responsáveis de categorias incluídas no kit podem atender
+o chamado; os demais continuam sem acesso. O catálogo usa os mesmos documentos de
+categorias nos adaptadores MongoDB e SQL Server, sem migração destrutiva.
+
+Testes isolados (sem acesso a dados de produção e sem envio de e-mails):
+
+```bash
+pip install -r backend/requirements-test.txt
+PYTHONPATH=backend pytest -c backend/pytest.ini backend/tests/test_security_helpers.py backend/tests/test_materials.py
+CI=true npm --prefix frontend test -- --watchAll=false --runInBand
+CI=true npm --prefix frontend run build
+```

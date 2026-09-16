@@ -38,6 +38,7 @@ from starlette.responses import Response as StarletteResponse, FileResponse, JSO
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict, EmailStr
 from bson import ObjectId
 from database import create_database
+from materials import register_material_routes, validate_kit
 
 # ----------------------------------------------------------------------------
 # Setup
@@ -256,7 +257,19 @@ def scope_match(user: dict) -> dict:
     """Empty for admins; category filter for scoped responsáveis."""
     if user.get("role") == "admin":
         return {}
-    return {"category_id": {"$in": user.get("categories", []) or []}}
+    return ticket_category_match(user.get("categories", []) or [])
+
+
+def ticket_category_match(ids):
+    return {"$or": [{"category_id": {"$in": ids}}, {"category_ids": {"$in": ids}}]}
+
+
+def can_access_ticket(user, ticket):
+    return user.get("role") == "admin" or bool(
+        set(user.get("categories") or []).intersection(
+            ticket.get("category_ids") or [ticket.get("category_id")]
+        )
+    )
 
 
 async def get_all_admin_notification_emails() -> List[str]:
@@ -608,6 +621,11 @@ async def notify_owners(ticket: dict, owners: List[str]):
         for k, v in (ticket.get("field_values") or {}).items()
     )
     rows += detail_rows
+    rows += "".join(
+        f'<tr><td style="padding:4px 12px 4px 0">{escape(i["category_name"])} / {escape(i["name"])}</td>'
+        f'<td><strong>{i["quantity"]} {"m" if i["measure"] == "metro" else "un"}</strong></td></tr>'
+        for i in ticket.get("material_items", [])
+    )
     html = (
         f'<table role="presentation" width="100%"><tr><td style="padding:24px;font-family:Arial,sans-serif;max-width:560px">'
         f'<h2 style="color:#7c3aed;margin:0 0 16px">Novo chamado aberto: {escape(ticket["ticket_number"])}</h2>'
@@ -878,6 +896,7 @@ def ser_category_public(doc: dict) -> dict:
     """Public category shape. Internal routing e-mails must never leave the admin API."""
     data = ser_category(doc)
     data.pop("owners", None)
+    data["materials"] = [item for item in data.get("materials", []) if item.get("active", True)]
     return data
 
 
@@ -1170,6 +1189,9 @@ async def reset_password(payload: ResetInput):
 # ----------------------------------------------------------------------------
 # Category endpoints
 # ----------------------------------------------------------------------------
+register_material_routes(api_router, lambda: db, require_admin, write_audit)
+
+
 @api_router.get("/categories")
 async def list_categories(request: Request, all: bool = False):
     if all:
@@ -1326,20 +1348,35 @@ async def create_ticket(
     except Exception:
         raise HTTPException(status_code=400, detail="Dados da solicitação inválidos")
 
-    category_id = str(data.get("category_id") or "").strip()
-    if not category_id:
-        raise HTTPException(status_code=400, detail="Categoria obrigatória")
-    try:
-        category_oid = ObjectId(category_id)
-    except Exception:
-        raise HTTPException(status_code=404, detail="Categoria não encontrada")
-    category = await db.categories.find_one({"_id": category_oid, "active": True})
-    if not category:
-        raise HTTPException(status_code=404, detail="Categoria não encontrada")
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Dados da solicitação inválidos")
+    kit_mode = data.get("kind") == "kit"
+    material_items, kit_categories = [], []
+    if kit_mode or data.get("material_items"):
+        material_items, kit_categories = await validate_kit(db, data.get("material_items"))
+    if kit_mode:
+        category = {
+            "_id": kit_categories[0]["_id"], "name": "Kit de materiais", "icon": "Package",
+            "lead_time_hours": max(int(c.get("lead_time_hours", 24)) for c in kit_categories),
+            "fields": [{**f, "label": f"{c['name']} — {f['label']}"} for c in kit_categories for f in c.get("fields", [])],
+        }
+    else:
+        category_id = str(data.get("category_id") or "").strip()
+        if not category_id:
+            raise HTTPException(status_code=400, detail="Categoria obrigatória")
+        category = await db.categories.find_one({"_id": as_object_id(category_id, "Categoria não encontrada"), "active": True})
+        if not category:
+            raise HTTPException(status_code=404, detail="Categoria não encontrada")
+        if any(item["category_id"] != category_id for item in material_items):
+            raise HTTPException(400, "Para combinar categorias diferentes, use a montagem de kit")
+        if any(item.get("active", True) for item in category.get("materials", [])) and not material_items:
+            raise HTTPException(400, "Selecione pelo menos um sub-item")
 
     requester = data.get("requester", {})
+    if not isinstance(requester, dict):
+        raise HTTPException(400, "Dados do solicitante inválidos")
     for field in ("matricula", "email", "empresa"):
-        if not str(requester.get(field, "")).strip():
+        if not isinstance(requester.get(field), str) or not requester[field].strip():
             raise HTTPException(status_code=400, detail=f"Campo obrigatório: {field}")
     requester_email = str(requester.get("email", "")).strip().lower()
     if len(requester_email) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", requester_email):
@@ -1348,7 +1385,7 @@ async def create_ticket(
         raise HTTPException(status_code=400, detail="Dados do solicitante excedem o limite permitido")
 
     field_values = data.get("field_values") or {}
-    if not isinstance(field_values, dict) or len(field_values) > 100:
+    if not isinstance(field_values, dict) or len(field_values) > (1000 if kit_mode else 100):
         raise HTTPException(status_code=400, detail="Campos da solicitação inválidos")
     for field in category.get("fields", []):
         label = field.get("label")
@@ -1391,7 +1428,7 @@ async def create_ticket(
         if missing:
             raise HTTPException(status_code=400, detail=f"Campo obrigatório: {label or 'campo'}")
     for key, value in field_values.items():
-        if len(str(key)) > 160 or len(str(value)) > 10000:
+        if len(str(key)) > (285 if kit_mode else 160) or len(str(value)) > 10000:
             raise HTTPException(status_code=400, detail="Um dos campos excede o limite permitido")
 
     file_ref = None
@@ -1428,6 +1465,9 @@ async def create_ticket(
             "empresa": requester["empresa"].strip(),
         },
         "field_values": field_values,
+        "material_items": material_items,
+        "category_ids": [str(c["_id"]) for c in kit_categories] if kit_mode else [str(category["_id"])],
+        "kind": "kit" if kit_mode else "standard",
         "file": file_ref,
         "status": "aberto",
         "lead_time_hours": lead,
@@ -1514,7 +1554,7 @@ def build_ticket_query(
             raise HTTPException(status_code=400, detail="Status inválido")
         query["status"] = status
     if category_id and category_id != "all":
-        query["category_id"] = category_id
+        query.setdefault("$and", []).append(ticket_category_match([category_id]))
     if search:
         escaped = re.escape(search.strip()[:160])
         query["$or"] = [
@@ -1539,10 +1579,9 @@ def build_ticket_query(
 
     if user.get("role") != "admin":
         cats = user.get("categories", []) or []
-        if category_id and category_id != "all" and category_id in cats:
-            query["category_id"] = category_id
-        else:
-            query["category_id"] = {"$in": cats}
+        if category_id and category_id != "all" and category_id not in cats:
+            query.setdefault("$and", []).append(ticket_category_match([]))
+        query.setdefault("$and", []).append(ticket_category_match(cats))
     return query
 
 
@@ -1593,7 +1632,7 @@ async def export_ticket_report(
     writer = csv.writer(output)
     writer.writerow([
         "Chamado", "Categoria", "Status", "Matrícula", "E-mail",
-        "Empresa", "Aberto em", "Prazo (h)", "Previsão"
+        "Empresa", "Aberto em", "Prazo (h)", "Previsão", "Materiais do kit"
     ])
     for doc in docs:
         requester = doc.get("requester") or {}
@@ -1607,6 +1646,7 @@ async def export_ticket_report(
             doc.get("created_at", ""),
             doc.get("lead_time_hours", ""),
             doc.get("due_at", ""),
+            " | ".join(f"{i['category_name']} / {i['name']}: {i['quantity']} {'m' if i['measure'] == 'metro' else 'un'}" for i in doc.get("material_items", [])),
         ])
 
     await write_audit(user, "report.export", "report", "tickets", {
@@ -1633,7 +1673,7 @@ async def get_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
     doc = await db.tickets.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
-    if user.get("role") != "admin" and doc.get("category_id") not in (user.get("categories") or []):
+    if not can_access_ticket(user, doc):
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
     return ser_ticket(doc)
 
@@ -1651,7 +1691,7 @@ async def update_status(
     doc = await db.tickets.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
-    if user.get("role") != "admin" and doc.get("category_id") not in (user.get("categories") or []):
+    if not can_access_ticket(user, doc):
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
     now = datetime.now(timezone.utc).isoformat()
     actor = user.get("name") or user.get("email")
@@ -1697,7 +1737,7 @@ async def download_file(path: str, user: dict = Depends(get_current_user)):
     record = await db.tickets.find_one({"file.storage_path": path})
     if not record:
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
-    if user.get("role") != "admin" and record.get("category_id") not in (user.get("categories") or []):
+    if not can_access_ticket(user, record):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado")
     data, content_type = await get_object(path)
     fname = os.path.basename(record["file"].get("original_filename", "arquivo")).replace("\r", "").replace("\n", "").replace('"', "")
@@ -1974,6 +2014,7 @@ async def startup():
     await db.rate_limits.create_index("expires_at", expireAfterSeconds=0)
     await db.tickets.create_index("ticket_number", unique=True)
     await db.tickets.create_index([("category_id", 1), ("created_at", -1)])
+    await db.tickets.create_index([("category_ids", 1), ("created_at", -1)])
     await db.tickets.create_index([("status", 1), ("created_at", -1)])
     await db.tickets.create_index("requester.email")
     await db.tickets.create_index("requester.matricula")

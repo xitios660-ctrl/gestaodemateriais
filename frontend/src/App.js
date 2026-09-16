@@ -54,6 +54,7 @@ function AnimatedRoutes() {
     <AnimatePresence mode="wait" initial={false}>
       <Routes location={location} key={location.pathname}>
         <Route path="/" element={<Page><Portal /></Page>} />
+        <Route path="/kit" element={<Page><TicketForm /></Page>} />
         <Route path="/abrir/:categoryId" element={<Page><TicketForm /></Page>} />
         <Route path="/acompanhar" element={<Page><Tracker /></Page>} />
         <Route path="/admin/login" element={<Page><AdminLogin /></Page>} />
