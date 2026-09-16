@@ -6,6 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 import { CategoryIcon, STATUS_STYLES, STATUS_LABELS } from "@/lib/ui";
 import { fadeUp, stagger, tap } from "@/lib/motion";
 import CategoryManager from "@/components/CategoryManager";
+import MaterialCatalogAdmin from "@/components/MaterialCatalogAdmin";
 import KitSummary from "@/components/KitSummary";
 import UserManager from "@/components/UserManager";
 import AuditManager from "@/components/AuditManager";
@@ -17,7 +18,7 @@ import { toast } from "sonner";
 import {
   LogOut, LayoutGrid, Ticket, Search, Clock, CheckCircle2, Inbox,
   TrendingUp, Download, Mail, Paperclip, Users, SlidersHorizontal, AlertTriangle,
-  ChevronRight, ChevronLeft, RefreshCw, X, Sparkles, History
+  ChevronRight, ChevronLeft, RefreshCw, X, Sparkles, History, Layers3
 } from "lucide-react";
 
 function fmt(dt) {
@@ -387,6 +388,7 @@ export default function AdminDashboard() {
   const tabs = [
     { id: "tickets", label: "Chamados", icon: Ticket, visible: true },
     { id: "categories", label: "Categorias", icon: LayoutGrid, visible: user?.role === "admin" },
+    { id: "catalogs", label: "Catálogos", icon: Layers3, visible: user?.role === "admin" },
     { id: "users", label: "Usuários", icon: Users, visible: user?.role === "admin" },
     { id: "audit", label: "Auditoria", icon: History, visible: user?.role === "admin" },
   ].filter((item) => item.visible);
@@ -695,6 +697,12 @@ export default function AdminDashboard() {
           {tab === "categories" && (
             <motion.section key="categories" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
               <CategoryManager categories={categories} catalogs={catalogs} onChange={loadAux} />
+            </motion.section>
+          )}
+
+          {tab === "catalogs" && (
+            <motion.section key="catalogs" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
+              <MaterialCatalogAdmin catalogs={catalogs} onChange={loadAux} />
             </motion.section>
           )}
 
