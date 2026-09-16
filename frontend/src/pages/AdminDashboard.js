@@ -232,6 +232,7 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState(null);
   const [tickets, setTickets] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [catalogs, setCatalogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -283,12 +284,14 @@ export default function AdminDashboard() {
 
   const loadAux = useCallback(async () => {
     try {
-      const [s, c] = await Promise.all([
+      const [s, c, m] = await Promise.all([
         api.get("/admin/stats"),
         api.get("/categories", { params: { all: true } }),
+        api.get("/material-catalogs"),
       ]);
       setStats(s.data);
       setCategories(c.data);
+      setCatalogs(m.data);
     } catch {
       toast.error("Não foi possível atualizar os indicadores");
     }
@@ -691,7 +694,7 @@ export default function AdminDashboard() {
 
           {tab === "categories" && (
             <motion.section key="categories" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-              <CategoryManager categories={categories} onChange={loadAux} />
+              <CategoryManager categories={categories} catalogs={catalogs} onChange={loadAux} />
             </motion.section>
           )}
 
