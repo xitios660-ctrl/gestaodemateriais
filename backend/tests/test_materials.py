@@ -331,3 +331,27 @@ def test_category_kit_requires_existing_catalog_with_active_items(ctx):
     assert no_link.status_code == 400
     assert 'vincule' in no_link.text.lower()
 
+
+
+def test_category_owners_are_notified_with_admins(ctx, monkeypatch):
+    api, _, _ = ctx
+    monkeypatch.setattr(
+        server,
+        'get_all_admin_notification_emails',
+        AsyncMock(return_value=['admin@example.com']),
+    )
+    owner = 'owner@telefonica.com'
+    category = cat(api, 'Com Owners', owners=[owner])
+
+    response = submit(
+        api,
+        [],
+        kind='standard',
+        category_id=category['id'],
+    )
+    assert response.status_code == 200, response.text
+
+    assert server.notify_owners.await_count == 1
+    recipients = server.notify_owners.await_args.args[1]
+    assert owner in recipients
+    assert 'admin@example.com' in recipients
