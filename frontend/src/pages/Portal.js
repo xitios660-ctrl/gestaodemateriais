@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { CategoryIcon } from "@/lib/ui";
 import { fadeUp, stagger, tap } from "@/lib/motion";
 import { SiteHeader } from "@/components/SiteHeader";
+import { VivoMascot } from "@/components/VivoMascot";
 import { Clock, ArrowRight, Sparkles, Search, Layers3, MousePointer2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -22,7 +23,21 @@ export default function Portal(){
     <motion.div variants={fadeUp} className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-100/80 border border-purple-200/60 text-purple-700 text-xs font-semibold mb-5"><Sparkles className="w-3.5 h-3.5"/> Gestão simples, do pedido à conclusão</motion.div>
     <motion.h1 variants={fadeUp} className="font-display text-4xl sm:text-5xl lg:text-[4.2rem] font-extrabold tracking-[-0.055em] text-slate-950 leading-[1.01]">O que você precisa,<br/><span className="text-transparent bg-clip-text bg-gradient-to-r from-[#660099] via-[#8c18ad] to-[#b13bc4]">em movimento.</span></motion.h1>
     <motion.p variants={fadeUp} className="mt-5 text-base sm:text-lg text-slate-500 leading-relaxed max-w-2xl">Escolha a área, envie sua solicitação e acompanhe o andamento. Sem menus confusos, sem perder o contexto.</motion.p>
-    <motion.div variants={fadeUp} className="mt-7 flex items-center gap-3"><button onClick={()=>document.getElementById('categorias')?.scrollIntoView({behavior:reduceMotion?'auto':'smooth'})} className="group inline-flex items-center gap-2 rounded-full bg-slate-950 text-white px-5 py-3 text-sm font-bold shadow-xl shadow-slate-900/10 transition hover:-translate-y-0.5 hover:bg-[#660099]">Explorar serviços <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1"/></button><span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-400"><MousePointer2 className="w-3.5 h-3.5"/> interativo</span></motion.div>
+    <motion.div variants={fadeUp} className="mt-7 flex items-end justify-between gap-4 max-w-3xl">
+      <div className="flex items-center gap-3 min-w-0">
+       <button onClick={()=>document.getElementById('categorias')?.scrollIntoView({behavior:reduceMotion?'auto':'smooth'})} className="group inline-flex items-center gap-2 rounded-full bg-slate-950 text-white px-5 py-3 text-sm font-bold shadow-xl shadow-slate-900/10 transition hover:-translate-y-0.5 hover:bg-[#660099]">Explorar serviços <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1"/></button>
+       <span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-400"><MousePointer2 className="w-3.5 h-3.5"/> interativo</span>
+      </div>
+      <motion.div
+       aria-hidden="true"
+       whileHover={reduceMotion?undefined:{y:-4,rotate:-2,scale:1.025}}
+       transition={{type:'spring',stiffness:220,damping:18}}
+       className="relative shrink-0 w-20 h-24 sm:w-28 sm:h-32 lg:w-32 lg:h-36 mr-1 sm:mr-4 -mb-3 sm:-mb-5"
+      >
+       <div className="absolute inset-2 rounded-full bg-purple-400/10 blur-2xl"/>
+       <VivoMascot className="relative z-10 w-full h-full drop-shadow-[0_16px_24px_rgba(102,0,153,0.18)]"/>
+      </motion.div>
+     </motion.div>
    </motion.div>
   </section>
 
