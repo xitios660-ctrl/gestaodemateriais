@@ -22,6 +22,7 @@ COLLECTION_NAMES = (
     "email_events",
     "counters",
     "system_settings",
+    "material_catalogs",
 )
 
 
