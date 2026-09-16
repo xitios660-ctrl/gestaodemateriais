@@ -26,62 +26,11 @@ export function SiteHeader() {
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 overflow-hidden"
       >
-        <svg
-          viewBox="0 0 1440 64"
-          preserveAspectRatio="none"
-          className="absolute inset-0 h-full w-full"
-        >
-          <defs>
-            <linearGradient id="header-neon-line" x1="0%" y1="50%" x2="100%" y2="50%">
-              <stop offset="0%" stopColor="#7E22CE" stopOpacity="0" />
-              <stop offset="34%" stopColor="#9333EA" stopOpacity="0.08" />
-              <stop offset="66%" stopColor="#D946EF" stopOpacity="0.18" />
-              <stop offset="100%" stopColor="#7E22CE" stopOpacity="0.02" />
-            </linearGradient>
-            <radialGradient id="header-neon-node">
-              <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.82" />
-              <stop offset="38%" stopColor="#D946EF" stopOpacity="0.34" />
-              <stop offset="100%" stopColor="#9333EA" stopOpacity="0" />
-            </radialGradient>
-            <filter id="header-neon-glow" x="-30%" y="-80%" width="160%" height="260%">
-              <feGaussianBlur stdDeviation="1.8" />
-            </filter>
-          </defs>
-
-          <path
-            d="M480 56 C 700 3, 965 3, 1168 36 C 1286 55, 1362 47, 1460 19"
-            fill="none"
-            stroke="url(#header-neon-line)"
-            strokeWidth="1.2"
-          />
-          <path
-            d="M610 66 C 836 14, 1018 16, 1194 43 C 1304 60, 1387 38, 1460 8"
-            fill="none"
-            stroke="url(#header-neon-line)"
-            strokeWidth="0.8"
-            opacity="0.62"
-          />
-          <path
-            d="M760 58 C 945 23, 1126 15, 1310 28 C 1373 33, 1417 27, 1460 18"
-            fill="none"
-            stroke="#A855F7"
-            strokeOpacity="0.055"
-            strokeWidth="5"
-            filter="url(#header-neon-glow)"
-          />
-
-          <g opacity="0.7">
-            <circle cx="1034" cy="25" r="7" fill="url(#header-neon-node)" />
-            <circle cx="1208" cy="43" r="5.5" fill="url(#header-neon-node)" />
-            <circle cx="1336" cy="30" r="6.5" fill="url(#header-neon-node)" />
-          </g>
-          <g stroke="#A855F7" strokeOpacity="0.08" strokeWidth="0.75">
-            <path d="M1034 25 L1208 43 L1336 30" />
-            <path d="M1208 43 L1276 17 L1336 30" />
-          </g>
-        </svg>
-
-        <div className="absolute inset-y-0 right-0 w-1/2 bg-gradient-to-l from-purple-50/20 via-white/10 to-transparent" />
+        <div className="absolute -right-16 top-2 h-20 w-[28rem] rounded-[999px] border border-fuchsia-300/20 rotate-[-5deg]" />
+        <div className="absolute -right-8 top-5 h-14 w-[22rem] rounded-[999px] border border-purple-400/15 rotate-[3deg]" />
+        <div className="absolute right-10 top-3 h-2.5 w-2.5 rounded-full bg-fuchsia-300/20 shadow-[0_0_16px_rgba(217,70,239,0.16)]" />
+        <div className="absolute right-28 bottom-3 h-1.5 w-1.5 rounded-full bg-purple-400/20 shadow-[0_0_12px_rgba(168,85,247,0.14)]" />
+        <div className="absolute inset-y-0 right-0 w-1/2 bg-gradient-to-l from-purple-50/25 via-white/10 to-transparent" />
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
