@@ -78,6 +78,18 @@ BREVO_SENDER_EMAIL = (os.environ.get("BREVO_SENDER_EMAIL") or "").strip().lower(
 BREVO_SENDER_NAME = (os.environ.get("BREVO_SENDER_NAME") or EMAIL_FROM_NAME).strip()
 BREVO_WEBHOOK_SECRET = (os.environ.get("BREVO_WEBHOOK_SECRET") or "").strip()
 EMAIL_PROVIDER = (os.environ.get("EMAIL_PROVIDER") or "auto").strip().lower()
+
+# SQL Server Database Mail (alternativa opcional; desativada por padrão).
+# Pode usar um SQL Server dedicado para e-mail mesmo com DB_ENGINE=mongodb.
+SQLSERVER_DBMAIL_ENABLED = (os.environ.get("SQLSERVER_DBMAIL_ENABLED") or "false").strip().lower() in ("1", "true", "yes")
+SQLSERVER_DBMAIL_PROFILE = (os.environ.get("SQLSERVER_DBMAIL_PROFILE") or "").strip()
+SQLSERVER_DBMAIL_SERVER = (os.environ.get("SQLSERVER_DBMAIL_SERVER") or os.environ.get("SQLSERVER_SERVER") or "").strip()
+SQLSERVER_DBMAIL_PORT = int(os.environ.get("SQLSERVER_DBMAIL_PORT") or os.environ.get("SQLSERVER_PORT") or "1433")
+SQLSERVER_DBMAIL_USER = (os.environ.get("SQLSERVER_DBMAIL_USER") or os.environ.get("SQLSERVER_USER") or "").strip()
+SQLSERVER_DBMAIL_PASSWORD = os.environ.get("SQLSERVER_DBMAIL_PASSWORD") or os.environ.get("SQLSERVER_PASSWORD") or ""
+SQLSERVER_DBMAIL_LOGIN_TIMEOUT = int(os.environ.get("SQLSERVER_DBMAIL_LOGIN_TIMEOUT") or "10")
+SQLSERVER_DBMAIL_QUERY_TIMEOUT = int(os.environ.get("SQLSERVER_DBMAIL_QUERY_TIMEOUT") or "30")
+
 DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
 PRIMARY_NOTIFICATION_EMAIL = (os.environ.get("PRIMARY_NOTIFICATION_EMAIL") or DEFAULT_OWNER_EMAIL).strip().lower()
 DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
@@ -545,11 +557,23 @@ def unique_recipient_emails(values) -> List[str]:
     return result
 
 
+def sqlserver_dbmail_ready() -> bool:
+    """Database Mail only becomes eligible after explicit opt-in."""
+    return bool(
+        EMAIL_PROVIDER == "sqlserver_dbmail"
+        and SQLSERVER_DBMAIL_ENABLED
+        and SQLSERVER_DBMAIL_PROFILE
+        and SQLSERVER_DBMAIL_SERVER
+        and SQLSERVER_DBMAIL_USER
+        and SQLSERVER_DBMAIL_PASSWORD
+    )
+
+
 def email_delivery_configured() -> bool:
     brevo_ready = bool(BREVO_API_KEY and BREVO_SENDER_EMAIL)
     emergent_ready = bool(EMAIL_KEY and not EMAIL_KEY.startswith("{"))
     smtp_ready = bool(SMTP_HOST and SMTP_FROM_EMAIL and SMTP_USERNAME and SMTP_PASSWORD)
-    return brevo_ready or emergent_ready or smtp_ready
+    return brevo_ready or emergent_ready or smtp_ready or sqlserver_dbmail_ready()
 
 
 def _smtp_send(to: str, subject: str, html: str) -> str:
@@ -574,6 +598,46 @@ def _smtp_send(to: str, subject: str, html: str) -> str:
             smtp.login(SMTP_USERNAME, SMTP_PASSWORD.replace(" ", ""))
             smtp.send_message(message)
     return f"smtp:{uuid.uuid4()}"
+
+
+def _sqlserver_dbmail_send(to: str, subject: str, html: str) -> str:
+    """Queue an HTML message through SQL Server 2019+ Database Mail."""
+    if not sqlserver_dbmail_ready():
+        raise RuntimeError("SQL Server Database Mail não está habilitado/configurado")
+
+    # Import lazy: MongoDB/Brevo/SMTP deployments keep working without touching
+    # SQL Server at runtime unless this provider is explicitly selected.
+    import pymssql
+
+    connection = pymssql.connect(
+        server=SQLSERVER_DBMAIL_SERVER,
+        port=SQLSERVER_DBMAIL_PORT,
+        user=SQLSERVER_DBMAIL_USER,
+        password=SQLSERVER_DBMAIL_PASSWORD,
+        database="msdb",
+        login_timeout=SQLSERVER_DBMAIL_LOGIN_TIMEOUT,
+        timeout=SQLSERVER_DBMAIL_QUERY_TIMEOUT,
+    )
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            EXEC msdb.dbo.sp_send_dbmail
+                @profile_name=%s,
+                @recipients=%s,
+                @subject=%s,
+                @body=%s,
+                @body_format='HTML';
+            """,
+            (SQLSERVER_DBMAIL_PROFILE, to, subject, html),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    # sp_send_dbmail enfileira a mensagem no SQL Server; o ID abaixo é o nosso
+    # identificador local para o log do chamado.
+    return f"sqlserver-dbmail:{uuid.uuid4()}"
 
 
 async def _send_via_emergent(to: str, subject: str, html: str) -> Optional[str]:
@@ -620,13 +684,17 @@ async def send_email(to: str, subject: str, html: str) -> Optional[str]:
     # O provider do Emergent é priorizado em "auto" porque apresentou melhor
     # entrega para caixas corporativas Microsoft/Outlook no ambiente de preview.
     # Brevo e SMTP continuam como fallback, sem alterar os destinatários.
-    preference = EMAIL_PROVIDER if EMAIL_PROVIDER in {"auto", "emergent", "brevo", "smtp"} else "auto"
+    preference = EMAIL_PROVIDER if EMAIL_PROVIDER in {"auto", "emergent", "brevo", "smtp", "sqlserver_dbmail"} else "auto"
     if preference in {"auto", "emergent"}:
         order = ("emergent", "brevo", "smtp")
     elif preference == "brevo":
         order = ("brevo", "emergent", "smtp")
-    else:
+    elif preference == "smtp":
         order = ("smtp", "emergent", "brevo")
+    else:
+        # Database Mail requires BOTH EMAIL_PROVIDER=sqlserver_dbmail and
+        # SQLSERVER_DBMAIL_ENABLED=true, preventing accidental activation.
+        order = ("sqlserver_dbmail", "emergent", "brevo", "smtp")
 
     for provider in order:
         try:
@@ -637,6 +705,8 @@ async def send_email(to: str, subject: str, html: str) -> Optional[str]:
                 email_id = await _send_via_brevo(to, subject, html)
             elif provider == "smtp" and SMTP_HOST and SMTP_FROM_EMAIL and SMTP_USERNAME and SMTP_PASSWORD:
                 email_id = await asyncio.to_thread(_smtp_send, to, subject, html)
+            elif provider == "sqlserver_dbmail" and sqlserver_dbmail_ready():
+                email_id = await asyncio.to_thread(_sqlserver_dbmail_send, to, subject, html)
 
             if email_id:
                 domain = to.rsplit("@", 1)[-1].lower() if "@" in to else "unknown"
@@ -652,10 +722,11 @@ async def send_email(to: str, subject: str, html: str) -> Optional[str]:
             )
 
     logger.error(
-        "E-mail não enviado. Providers disponíveis: emergent=%s brevo=%s smtp=%s",
+        "E-mail não enviado. Providers disponíveis: emergent=%s brevo=%s smtp=%s sqlserver_dbmail=%s",
         bool(EMAIL_KEY and not EMAIL_KEY.startswith("{")),
         bool(BREVO_API_KEY and BREVO_SENDER_EMAIL),
         bool(SMTP_HOST and SMTP_FROM_EMAIL and SMTP_USERNAME and SMTP_PASSWORD),
+        sqlserver_dbmail_ready(),
     )
     return None
 
@@ -2154,11 +2225,12 @@ async def startup():
     await seed_categories()
     logger.info("Email delivery configured: %s", "yes" if email_delivery_configured() else "no")
     logger.info(
-        "Email provider preference=%s ready: emergent=%s brevo=%s smtp=%s",
+        "Email provider preference=%s ready: emergent=%s brevo=%s smtp=%s sqlserver_dbmail=%s",
         EMAIL_PROVIDER,
         bool(EMAIL_KEY and not EMAIL_KEY.startswith("{")),
         bool(BREVO_API_KEY and BREVO_SENDER_EMAIL),
         bool(SMTP_HOST and SMTP_FROM_EMAIL and SMTP_USERNAME and SMTP_PASSWORD),
+        sqlserver_dbmail_ready(),
     )
     try:
         await init_storage()

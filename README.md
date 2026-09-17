@@ -199,6 +199,29 @@ python migrate_mongodb_to_sqlserver.py --apply --replace
 O script preserva o MongoDB, copia os IDs e documentos e compara a quantidade de registros de todas as tabelas ao final. Só depois disso você deve trocar `DB_ENGINE=sqlserver`.
 
 
+## E-mail alternativo: SQL Server Database Mail
+
+Além de Emergent, Brevo e SMTP, o backend está preparado para usar o **Database Mail do SQL Server 2019+** para disparar os mesmos e-mails HTML do portal. Essa opção é independente do banco principal: é possível continuar com `DB_ENGINE=mongodb` e, futuramente, usar um SQL Server somente para o envio de e-mails.
+
+A alternativa fica **desativada por padrão**. Nada muda no envio atual até as duas opções abaixo serem definidas explicitamente:
+
+```env
+EMAIL_PROVIDER=sqlserver_dbmail
+SQLSERVER_DBMAIL_ENABLED=true
+SQLSERVER_DBMAIL_PROFILE=GestaoMateriais
+SQLSERVER_DBMAIL_SERVER=servidor-ou-ip
+SQLSERVER_DBMAIL_PORT=1433
+SQLSERVER_DBMAIL_USER=usuario_dbmail
+SQLSERVER_DBMAIL_PASSWORD=senha
+```
+
+O SQL Server precisa ter o recurso Database Mail habilitado, um perfil configurado e o usuário da aplicação autorizado no `msdb`. Há um modelo seguro em `backend/sql/sqlserver2019_database_mail.example.sql`.
+
+Quando ativado, o backend chama `msdb.dbo.sp_send_dbmail` com `@body_format='HTML'`. O SQL Server apenas enfileira/dispara a mensagem; a entrega final ainda depende do servidor SMTP configurado no perfil e das políticas do destinatário (SPF, DKIM, DMARC, filtros corporativos etc.).
+
+A ativação é separada de `DB_ENGINE` de propósito. Assim, trocar MongoDB por SQL Server **não ativa e-mail pelo SQL automaticamente**, e ativar Database Mail no futuro também não exige trocar o banco da aplicação.
+
+
 ## Deploy em produção
 
 O projeto agora pode rodar como **um único serviço**: o React é compilado e servido pelo FastAPI no mesmo domínio.
