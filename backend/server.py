@@ -77,6 +77,7 @@ BREVO_API_KEY = (os.environ.get("BREVO_API_KEY") or "").strip()
 BREVO_SENDER_EMAIL = (os.environ.get("BREVO_SENDER_EMAIL") or "").strip().lower()
 BREVO_SENDER_NAME = (os.environ.get("BREVO_SENDER_NAME") or EMAIL_FROM_NAME).strip()
 BREVO_WEBHOOK_SECRET = (os.environ.get("BREVO_WEBHOOK_SECRET") or "").strip()
+EMAIL_PROVIDER = (os.environ.get("EMAIL_PROVIDER") or "auto").strip().lower()
 DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
 PRIMARY_NOTIFICATION_EMAIL = (os.environ.get("PRIMARY_NOTIFICATION_EMAIL") or DEFAULT_OWNER_EMAIL).strip().lower()
 DEFAULT_OWNERS = [DEFAULT_OWNER_EMAIL] if DEFAULT_OWNER_EMAIL else []
@@ -575,55 +576,87 @@ def _smtp_send(to: str, subject: str, html: str) -> str:
     return f"smtp:{uuid.uuid4()}"
 
 
+async def _send_via_emergent(to: str, subject: str, html: str) -> Optional[str]:
+    if not (EMAIL_KEY and not EMAIL_KEY.startswith("{")):
+        return None
+    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    async with httpx.AsyncClient(timeout=30) as client_http:
+        resp = await client_http.post(
+            f"{EMAIL_BASE_URL}/api/v1/email/send",
+            headers={"X-Email-Key": EMAIL_KEY},
+            json=payload,
+        )
+    resp.raise_for_status()
+    return resp.json().get("id")
+
+
+async def _send_via_brevo(to: str, subject: str, html: str) -> Optional[str]:
+    if not (BREVO_API_KEY and BREVO_SENDER_EMAIL):
+        return None
+    payload = {
+        "sender": {"email": BREVO_SENDER_EMAIL, "name": BREVO_SENDER_NAME},
+        "to": [{"email": to}],
+        "subject": subject,
+        "htmlContent": html,
+    }
+    async with httpx.AsyncClient(timeout=30) as client_http:
+        resp = await client_http.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={
+                "api-key": BREVO_API_KEY,
+                "accept": "application/json",
+                "content-type": "application/json",
+            },
+            json=payload,
+        )
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("messageId") or data.get("messageIds", [None])[0]
+
+
 async def send_email(to: str, subject: str, html: str) -> Optional[str]:
     _assert_safe_email(subject, html)
 
-    if BREVO_API_KEY and BREVO_SENDER_EMAIL:
-        try:
-            payload = {
-                "sender": {"email": BREVO_SENDER_EMAIL, "name": BREVO_SENDER_NAME},
-                "to": [{"email": to}],
-                "subject": subject,
-                "htmlContent": html,
-            }
-            async with httpx.AsyncClient(timeout=30) as client_http:
-                resp = await client_http.post(
-                    "https://api.brevo.com/v3/smtp/email",
-                    headers={
-                        "api-key": BREVO_API_KEY,
-                        "accept": "application/json",
-                        "content-type": "application/json",
-                    },
-                    json=payload,
-                )
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("messageId") or data.get("messageIds", [None])[0]
-        except Exception as exc:
-            logger.error("Brevo send error to %s: %s: %s", to, type(exc).__name__, str(exc)[:240])
+    # O provider do Emergent é priorizado em "auto" porque apresentou melhor
+    # entrega para caixas corporativas Microsoft/Outlook no ambiente de preview.
+    # Brevo e SMTP continuam como fallback, sem alterar os destinatários.
+    preference = EMAIL_PROVIDER if EMAIL_PROVIDER in {"auto", "emergent", "brevo", "smtp"} else "auto"
+    if preference in {"auto", "emergent"}:
+        order = ("emergent", "brevo", "smtp")
+    elif preference == "brevo":
+        order = ("brevo", "emergent", "smtp")
+    else:
+        order = ("smtp", "emergent", "brevo")
 
-    if EMAIL_KEY and not EMAIL_KEY.startswith("{"):
-        payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    for provider in order:
         try:
-            async with httpx.AsyncClient(timeout=30) as client_http:
-                resp = await client_http.post(
-                    f"{EMAIL_BASE_URL}/api/v1/email/send",
-                    headers={"X-Email-Key": EMAIL_KEY},
-                    json=payload,
-                )
-            resp.raise_for_status()
-            return resp.json().get("id")
-        except Exception as exc:
-            logger.warning("Provider de e-mail principal falhou; tentando SMTP: %s", type(exc).__name__)
+            email_id = None
+            if provider == "emergent":
+                email_id = await _send_via_emergent(to, subject, html)
+            elif provider == "brevo":
+                email_id = await _send_via_brevo(to, subject, html)
+            elif provider == "smtp" and SMTP_HOST and SMTP_FROM_EMAIL and SMTP_USERNAME and SMTP_PASSWORD:
+                email_id = await asyncio.to_thread(_smtp_send, to, subject, html)
 
-    if SMTP_HOST and SMTP_FROM_EMAIL and SMTP_USERNAME and SMTP_PASSWORD:
-        try:
-            return await asyncio.to_thread(_smtp_send, to, subject, html)
+            if email_id:
+                domain = to.rsplit("@", 1)[-1].lower() if "@" in to else "unknown"
+                logger.info("Email sent via %s to domain=%s", provider, domain)
+                return email_id
         except Exception as exc:
-            logger.error("SMTP send error to %s: %s: %s", to, type(exc).__name__, str(exc)[:240])
-            return None
+            logger.warning(
+                "Email provider %s failed for %s: %s: %s",
+                provider,
+                to,
+                type(exc).__name__,
+                str(exc)[:240],
+            )
 
-    logger.error("E-mail não configurado. Defina EMERGENT_EMAIL_KEY ou SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD/SMTP_FROM_EMAIL")
+    logger.error(
+        "E-mail não enviado. Providers disponíveis: emergent=%s brevo=%s smtp=%s",
+        bool(EMAIL_KEY and not EMAIL_KEY.startswith("{")),
+        bool(BREVO_API_KEY and BREVO_SENDER_EMAIL),
+        bool(SMTP_HOST and SMTP_FROM_EMAIL and SMTP_USERNAME and SMTP_PASSWORD),
+    )
     return None
 
 
@@ -2120,6 +2153,13 @@ async def startup():
     await seed_admin()
     await seed_categories()
     logger.info("Email delivery configured: %s", "yes" if email_delivery_configured() else "no")
+    logger.info(
+        "Email provider preference=%s ready: emergent=%s brevo=%s smtp=%s",
+        EMAIL_PROVIDER,
+        bool(EMAIL_KEY and not EMAIL_KEY.startswith("{")),
+        bool(BREVO_API_KEY and BREVO_SENDER_EMAIL),
+        bool(SMTP_HOST and SMTP_FROM_EMAIL and SMTP_USERNAME and SMTP_PASSWORD),
+    )
     try:
         await init_storage()
         logger.info("Storage inicializado (%s)", "Emergent" if EMERGENT_KEY else f"local: {LOCAL_STORAGE_DIR}")
