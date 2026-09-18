@@ -1,4 +1,4 @@
-"""Safe MongoDB -> SQL Server 2019 migration helper.
+"""Safe MongoDB -> SQL Server 2012 migration helper.
 
 Dry-run is the default. Nothing is written until --apply is passed.
 The live application can stay on DB_ENGINE=mongodb while this script prepares/copies
@@ -102,7 +102,7 @@ async def migrate(apply: bool, replace: bool):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Copia as coleções do MongoDB para as tabelas compatíveis do SQL Server 2019+."
+        description="Copia as coleções do MongoDB para as tabelas compatíveis do SQL Server 2012+."
     )
     parser.add_argument(
         "--apply",
