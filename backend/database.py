@@ -9,6 +9,14 @@ from typing import Any, Optional
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
 
+from sqlserver_support import (
+    SqlServerSettings,
+    connect_sqlserver,
+    fetchall_dicts,
+    fetchone_dict,
+    validate_driver_server_compatibility,
+)
+
 
 COLLECTION_NAMES = (
     "users",
@@ -401,8 +409,8 @@ class SqlServerCollection:
         table_name = self.database.prefix + self.name
         cursor.execute(
             f"""
-            IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = %s)
-                EXEC('CREATE SCHEMA [{schema}]');
+            IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'{schema}')
+                EXEC(N'CREATE SCHEMA [{schema}] AUTHORIZATION [dbo]');
 
             IF OBJECT_ID(N'[{schema}].[{table_name}]', N'U') IS NULL
             BEGIN
@@ -410,12 +418,10 @@ class SqlServerCollection:
                     [id] NVARCHAR(64) NOT NULL PRIMARY KEY,
                     [doc] NVARCHAR(MAX) NOT NULL,
                     [unique_key] NVARCHAR(450) NULL,
-                    [updated_at] DATETIME2(3) NOT NULL CONSTRAINT [DF_{table_name}_updated_at] DEFAULT SYSUTCDATETIME(),
-                    CONSTRAINT [CK_{table_name}_json] CHECK (ISJSON([doc]) = 1)
+                    [updated_at] DATETIME2(3) NOT NULL CONSTRAINT [DF_{table_name}_updated_at] DEFAULT SYSUTCDATETIME()
                 );
             END
-            """,
-            (schema,),
+            """
         )
         conn.commit()
         self._table_ready = True
@@ -424,11 +430,11 @@ class SqlServerCollection:
         if not self.ttl_fields:
             return
         self._ensure_table_sync(conn)
-        cursor = conn.cursor(as_dict=True)
+        cursor = conn.cursor()
         cursor.execute(f"SELECT [id], [doc] FROM {self.table}")
         now = datetime.now(timezone.utc)
         expired_ids = []
-        for row in cursor.fetchall():
+        for row in fetchall_dicts(cursor):
             try:
                 doc = _deserialize_doc(row["doc"])
             except Exception:
@@ -452,16 +458,16 @@ class SqlServerCollection:
         if expired_ids:
             cursor = conn.cursor()
             for item_id in expired_ids:
-                cursor.execute(f"DELETE FROM {self.table} WHERE [id] = %s", (item_id,))
+                cursor.execute(f"DELETE FROM {self.table} WHERE [id] = ?", (item_id,))
             conn.commit()
 
     def _load_all_sync(self, conn, *, lock: bool = False) -> list[dict]:
         self._ensure_table_sync(conn)
         self._cleanup_expired_sync(conn)
-        cursor = conn.cursor(as_dict=True)
+        cursor = conn.cursor()
         hint = " WITH (UPDLOCK, HOLDLOCK)" if lock else ""
         cursor.execute(f"SELECT [doc] FROM {self.table}{hint}")
-        return [_deserialize_doc(row["doc"]) for row in cursor.fetchall()]
+        return [_deserialize_doc(row["doc"]) for row in fetchall_dicts(cursor)]
 
     def _unique_key_for(self, doc: dict):
         if not self.unique_field:
@@ -482,12 +488,12 @@ class SqlServerCollection:
         cursor = conn.cursor()
         if insert:
             cursor.execute(
-                f"INSERT INTO {self.table} ([id], [doc], [unique_key]) VALUES (%s, %s, %s)",
+                f"INSERT INTO {self.table} ([id], [doc], [unique_key]) VALUES (?, ?, ?)",
                 (item_id, raw, unique_key),
             )
         else:
             cursor.execute(
-                f"UPDATE {self.table} SET [doc] = %s, [unique_key] = %s, [updated_at] = SYSUTCDATETIME() WHERE [id] = %s",
+                f"UPDATE {self.table} SET [doc] = ?, [unique_key] = ?, [updated_at] = SYSUTCDATETIME() WHERE [id] = ?",
                 (raw, unique_key, item_id),
             )
 
@@ -619,7 +625,7 @@ class SqlServerCollection:
                     conn.rollback()
                     return DeleteResult(0)
                 cursor = conn.cursor()
-                cursor.execute(f"DELETE FROM {self.table} WHERE [id] = %s", (str(target["_id"]),))
+                cursor.execute(f"DELETE FROM {self.table} WHERE [id] = ?", (str(target["_id"]),))
                 conn.commit()
                 return DeleteResult(1)
             except Exception:
@@ -637,7 +643,7 @@ class SqlServerCollection:
                 ids = [str(doc["_id"]) for doc in docs if _matches(doc, query or {})]
                 cursor = conn.cursor()
                 for item_id in ids:
-                    cursor.execute(f"DELETE FROM {self.table} WHERE [id] = %s", (item_id,))
+                    cursor.execute(f"DELETE FROM {self.table} WHERE [id] = ?", (item_id,))
                 conn.commit()
                 return DeleteResult(len(ids))
             except Exception:
@@ -668,7 +674,7 @@ class SqlServerCollection:
                     cursor = conn.cursor()
                     for doc in docs:
                         cursor.execute(
-                            f"UPDATE {self.table} SET [unique_key] = %s WHERE [id] = %s",
+                            f"UPDATE {self.table} SET [unique_key] = ? WHERE [id] = ?",
                             (self._unique_key_for(doc), str(doc["_id"])),
                         )
                     index_name = _safe_identifier(
@@ -679,7 +685,7 @@ class SqlServerCollection:
                         f"""
                         IF NOT EXISTS (
                             SELECT 1 FROM sys.indexes
-                            WHERE name = %s AND object_id = OBJECT_ID(N'{self.table}')
+                            WHERE name = ? AND object_id = OBJECT_ID(N'{self.table}')
                         )
                         CREATE UNIQUE INDEX [{index_name}] ON {self.table} ([unique_key])
                         WHERE [unique_key] IS NOT NULL
@@ -726,22 +732,37 @@ class SqlServerAdmin:
         def work():
             conn = self.client._connect()
             try:
-                cursor = conn.cursor(as_dict=True)
-                cursor.execute(
-                    "SELECT CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(128)) AS version, "
-                    "CAST(SERVERPROPERTY('ProductMajorVersion') AS INT) AS major_version"
-                )
-                row = cursor.fetchone() or {}
-                self.client.server_version = row.get("version")
-                self.client.server_major_version = row.get("major_version")
-                if self.client.server_major_version and int(self.client.server_major_version) < 15:
+                cursor = conn.cursor()
+                cursor.execute("SELECT CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(128)) AS version")
+                row = fetchone_dict(cursor)
+                self.client.server_version = str(row.get("version") or "")
+                try:
+                    self.client.server_major_version = int(self.client.server_version.split(".", 1)[0])
+                except (TypeError, ValueError):
+                    self.client.server_major_version = None
+
+                if self.client.server_major_version and int(self.client.server_major_version) < 11:
                     raise RuntimeError(
-                        f"SQL Server 2019 ou superior requerido; major version encontrada: {self.client.server_major_version}"
+                        "SQL Server 2012 ou superior requerido; "
+                        f"major version encontrada: {self.client.server_major_version}"
                     )
+
+                if self.client.server_major_version:
+                    validate_driver_server_compatibility(
+                        conn,
+                        self.client.settings,
+                        int(self.client.server_major_version),
+                    )
+
                 for collection in COLLECTION_NAMES:
-                    coll = getattr(self.client.database, collection)
-                    coll._ensure_table_sync(conn)
-                return {"ok": 1, "version": self.client.server_version}
+                    getattr(self.client.database, collection)._ensure_table_sync(conn)
+
+                return {
+                    "ok": 1,
+                    "version": self.client.server_version,
+                    "major_version": self.client.server_major_version,
+                    "odbc_driver": self.client.settings.driver,
+                }
             finally:
                 conn.close()
 
@@ -750,55 +771,30 @@ class SqlServerAdmin:
 
 class SqlServerClient:
     def __init__(self):
-        try:
-            import pymssql
-        except ImportError as exc:
-            raise RuntimeError(
-                "DB_ENGINE=sqlserver exige o pacote pymssql. Instale as dependências do backend."
-            ) from exc
-
-        self.pymssql = pymssql
-        self.server = (os.environ.get("SQLSERVER_SERVER") or os.environ.get("SQLSERVER_HOST") or "").strip()
-        self.port = int(os.environ.get("SQLSERVER_PORT") or "1433")
-        self.database_name = (os.environ.get("SQLSERVER_DATABASE") or os.environ.get("DB_NAME") or "gestao_materiais").strip()
-        self.user = (os.environ.get("SQLSERVER_USER") or os.environ.get("SQLSERVER_USERNAME") or "").strip()
-        self.password = os.environ.get("SQLSERVER_PASSWORD") or ""
+        self.settings = SqlServerSettings.from_env(
+            prefix="SQLSERVER",
+            database_default=(os.environ.get("DB_NAME") or "gestao_materiais").strip(),
+        )
+        self.server = self.settings.server
+        self.port = self.settings.port
+        self.database_name = self.settings.database
+        self.user = self.settings.user
+        self.password = self.settings.password
         self.schema = _safe_identifier(os.environ.get("SQLSERVER_SCHEMA") or "dbo", "dbo")
         self.prefix = _safe_identifier(os.environ.get("SQLSERVER_TABLE_PREFIX") or "gm_", "gm_")
-        self.login_timeout = int(os.environ.get("SQLSERVER_LOGIN_TIMEOUT") or "10")
-        self.query_timeout = int(os.environ.get("SQLSERVER_QUERY_TIMEOUT") or "30")
+        self.login_timeout = self.settings.login_timeout
+        self.query_timeout = self.settings.query_timeout
         self.server_version = None
         self.server_major_version = None
-
-        if not self.server:
-            raise RuntimeError("SQLSERVER_SERVER é obrigatório quando DB_ENGINE=sqlserver")
-        if not self.user:
-            raise RuntimeError("SQLSERVER_USER é obrigatório quando DB_ENGINE=sqlserver")
-        if not self.password:
-            raise RuntimeError("SQLSERVER_PASSWORD é obrigatório quando DB_ENGINE=sqlserver")
-        if not self.database_name:
-            raise RuntimeError("SQLSERVER_DATABASE é obrigatório quando DB_ENGINE=sqlserver")
 
         self.database = SqlServerDatabase(self)
         self.admin = SqlServerAdmin(self)
 
     def _connect(self):
-        return self.pymssql.connect(
-            server=self.server,
-            user=self.user,
-            password=self.password,
-            database=self.database_name,
-            port=self.port,
-            login_timeout=self.login_timeout,
-            timeout=self.query_timeout,
-            charset="UTF-8",
-            autocommit=False,
-        )
+        return connect_sqlserver(self.settings)
 
     def close(self):
-        # Connections are short-lived and closed per operation.
         return None
-
 
 def create_database():
     engine = (os.environ.get("DB_ENGINE") or "mongodb").strip().lower()
