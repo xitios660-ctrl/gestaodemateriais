@@ -6,10 +6,10 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV_DIR=".venv-sqlserver"
 
 "$PYTHON_BIN" -m venv "$VENV_DIR"
-"$VENV_DIR/bin/python" -m pip install --upgrade pip
 "$VENV_DIR/bin/pip" install -r requirements.txt
+"$VENV_DIR/bin/python" ./tools/check_server_compatibility.py
 
 echo ""
 echo "Ambiente SQL Server criado em backend/$VENV_DIR"
-echo "Ative com: source $VENV_DIR/bin/activate"
-echo "Depois copie .env.sqlserver.example para .env e preencha as credenciais."
+echo "Nenhuma atualização do sistema operacional/SQL Server foi executada."
+echo "Use sql/sqlserver2012_schema.sql para criar a estrutura do banco."
