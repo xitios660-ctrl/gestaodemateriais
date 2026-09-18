@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field, BeforeValidator, ConfigDict, EmailStr
 from bson import ObjectId
 from database import create_database
 from materials import register_material_routes, validate_kit, validate_catalog_kit
+from sqlserver_support import SqlServerSettings, connect_sqlserver
 
 # ----------------------------------------------------------------------------
 # Setup
@@ -80,15 +81,9 @@ BREVO_WEBHOOK_SECRET = (os.environ.get("BREVO_WEBHOOK_SECRET") or "").strip()
 EMAIL_PROVIDER = (os.environ.get("EMAIL_PROVIDER") or "auto").strip().lower()
 
 # SQL Server Database Mail (alternativa opcional; desativada por padrão).
-# Pode usar um SQL Server dedicado para e-mail mesmo com DB_ENGINE=mongodb.
+# Usa a mesma camada ODBC 17/18 e o mesmo cofre criptográfico do backend SQL.
 SQLSERVER_DBMAIL_ENABLED = (os.environ.get("SQLSERVER_DBMAIL_ENABLED") or "false").strip().lower() in ("1", "true", "yes")
 SQLSERVER_DBMAIL_PROFILE = (os.environ.get("SQLSERVER_DBMAIL_PROFILE") or "").strip()
-SQLSERVER_DBMAIL_SERVER = (os.environ.get("SQLSERVER_DBMAIL_SERVER") or os.environ.get("SQLSERVER_SERVER") or "").strip()
-SQLSERVER_DBMAIL_PORT = int(os.environ.get("SQLSERVER_DBMAIL_PORT") or os.environ.get("SQLSERVER_PORT") or "1433")
-SQLSERVER_DBMAIL_USER = (os.environ.get("SQLSERVER_DBMAIL_USER") or os.environ.get("SQLSERVER_USER") or "").strip()
-SQLSERVER_DBMAIL_PASSWORD = os.environ.get("SQLSERVER_DBMAIL_PASSWORD") or os.environ.get("SQLSERVER_PASSWORD") or ""
-SQLSERVER_DBMAIL_LOGIN_TIMEOUT = int(os.environ.get("SQLSERVER_DBMAIL_LOGIN_TIMEOUT") or "10")
-SQLSERVER_DBMAIL_QUERY_TIMEOUT = int(os.environ.get("SQLSERVER_DBMAIL_QUERY_TIMEOUT") or "30")
 
 DEFAULT_OWNER_EMAIL = (os.environ.get("DEFAULT_OWNER_EMAIL") or "").strip().lower()
 PRIMARY_NOTIFICATION_EMAIL = (os.environ.get("PRIMARY_NOTIFICATION_EMAIL") or DEFAULT_OWNER_EMAIL).strip().lower()
@@ -558,15 +553,22 @@ def unique_recipient_emails(values) -> List[str]:
 
 
 def sqlserver_dbmail_ready() -> bool:
-    """Database Mail only becomes eligible after explicit opt-in."""
-    return bool(
+    """Database Mail só fica elegível após ativação explícita."""
+    if not (
         EMAIL_PROVIDER == "sqlserver_dbmail"
         and SQLSERVER_DBMAIL_ENABLED
         and SQLSERVER_DBMAIL_PROFILE
-        and SQLSERVER_DBMAIL_SERVER
-        and SQLSERVER_DBMAIL_USER
-        and SQLSERVER_DBMAIL_PASSWORD
-    )
+    ):
+        return False
+    try:
+        SqlServerSettings.from_env(
+            prefix="SQLSERVER_DBMAIL",
+            database_default="msdb",
+            fallback_prefix="SQLSERVER",
+        )
+        return True
+    except Exception:
+        return False
 
 
 def email_delivery_configured() -> bool:
@@ -601,42 +603,36 @@ def _smtp_send(to: str, subject: str, html: str) -> str:
 
 
 def _sqlserver_dbmail_send(to: str, subject: str, html: str) -> str:
-    """Queue an HTML message through SQL Server 2019+ Database Mail."""
+    """Enfileira e-mail HTML via SQL Server 2012+ Database Mail."""
     if not sqlserver_dbmail_ready():
         raise RuntimeError("SQL Server Database Mail não está habilitado/configurado")
 
-    # Import lazy: MongoDB/Brevo/SMTP deployments keep working without touching
-    # SQL Server at runtime unless this provider is explicitly selected.
-    import pymssql
-
-    connection = pymssql.connect(
-        server=SQLSERVER_DBMAIL_SERVER,
-        port=SQLSERVER_DBMAIL_PORT,
-        user=SQLSERVER_DBMAIL_USER,
-        password=SQLSERVER_DBMAIL_PASSWORD,
-        database="msdb",
-        login_timeout=SQLSERVER_DBMAIL_LOGIN_TIMEOUT,
-        timeout=SQLSERVER_DBMAIL_QUERY_TIMEOUT,
+    settings = SqlServerSettings.from_env(
+        prefix="SQLSERVER_DBMAIL",
+        database_default="msdb",
+        fallback_prefix="SQLSERVER",
     )
+    connection = connect_sqlserver(settings)
     try:
         cursor = connection.cursor()
         cursor.execute(
             """
             EXEC msdb.dbo.sp_send_dbmail
-                @profile_name=%s,
-                @recipients=%s,
-                @subject=%s,
-                @body=%s,
+                @profile_name=?,
+                @recipients=?,
+                @subject=?,
+                @body=?,
                 @body_format='HTML';
             """,
-            (SQLSERVER_DBMAIL_PROFILE, to, subject, html),
+            SQLSERVER_DBMAIL_PROFILE,
+            to,
+            subject,
+            html,
         )
         connection.commit()
     finally:
         connection.close()
 
-    # sp_send_dbmail enfileira a mensagem no SQL Server; o ID abaixo é o nosso
-    # identificador local para o log do chamado.
     return f"sqlserver-dbmail:{uuid.uuid4()}"
 
 
