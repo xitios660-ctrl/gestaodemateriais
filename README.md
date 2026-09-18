@@ -2,7 +2,7 @@
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fxitios660-ctrl%2Fgestaodemateriais)
 
-Portal interno para abertura e gestão de chamados (Vivo). Stack: **React** (frontend) + **FastAPI** (backend) + **MongoDB** por padrão, com backend alternativo preparado para **SQL Server 2019+**.
+Portal interno para abertura e gestão de chamados (Vivo). Stack: **React** (frontend) + **FastAPI** (backend) + **MongoDB** por padrão, com backend alternativo preparado para **SQL Server 2012+**.
 
 ## Estrutura
 
@@ -25,7 +25,7 @@ Portal interno para abertura e gestão de chamados (Vivo). Stack: **React** (fro
 
 ## Pré-requisitos
 - Python 3.11+
-- Node.js 18+ e **Yarn** (não use npm)
+- Node.js **18.20.8+**; npm 10.x ou Yarn 1.x
 - MongoDB rodando localmente (ou uma URI do MongoDB Atlas)
 
 ## 1) Backend
@@ -57,7 +57,7 @@ EMERGENT_LLM_KEY=""        # usado pelo object storage (upload de arquivos)
 ```
 
 Observações importantes para rodar FORA da Emergent:
-- **E-mail (Resend gerenciado):** a `EMERGENT_EMAIL_KEY` é provisionada dentro da plataforma Emergent. Fora dela o envio real não funciona; o código apenas registra o link no log (útil para testes). Para enviar de verdade fora da Emergent, troque a função de envio por uma conta própria de e-mail (ex.: Resend/SMTP).
+- **E-mail:** o backend aceita Emergent, Brevo, SMTP e SQL Server Database Mail opcional.
 - **Upload de arquivos (Object Storage):** usa a `EMERGENT_LLM_KEY` da Emergent. Fora da plataforma o upload/download de anexos não funcionará sem substituir por um storage próprio (ex.: S3/MinIO/disco local).
 
 Rodar o backend:
@@ -116,110 +116,124 @@ Abre em `http://localhost:3000`.
 
 
 
-## Banco alternativo: SQL Server 2019+
+## Banco alternativo: SQL Server 2012+
 
-O sistema continua usando **MongoDB por padrão**. A troca é feita somente pela variável `DB_ENGINE`, sem alterar as telas nem a lógica da API.
+O sistema continua usando **MongoDB por padrão**. A alternativa SQL foi ajustada
+para **SQL Server 2012 (major 11) ou superior**, sem mudar telas, rotas ou regras
+de negócio.
 
-### Ambientes
+### Compatibilidade com o servidor corporativo
 
-MongoDB atual:
+O projeto está preparado para o ambiente informado, incluindo Python 3.11,
+Node 18.20.8 e Windows Server da geração 2012 R2. Nenhum script do projeto
+atualiza Windows ou SQL Server. O frontend usa React Router 6.x para não exigir
+Node 20.
+
+### Drivers e conexão
+
+O acesso SQL agora usa **pyodbc** com Microsoft ODBC Driver 17 ou 18:
 
 ```env
-DB_ENGINE=mongodb
-MONGO_URL=mongodb+srv://...
-DB_NAME=gestao_materiais
+SQLSERVER_ODBC_DRIVER=auto
+SQLSERVER_ODBC_DRIVER_PREFERENCE=17,18
 ```
 
-SQL Server 2019+:
+A ordem padrão prioriza Driver 17. As consultas usam parâmetros ODBC (`?`),
+`NVARCHAR`, `DATETIME2`, `SYSUTCDATETIME()` e transações compatíveis com
+SQL Server 2012. Não há dependência de `ISJSON`, `JSON_VALUE` ou outros
+recursos introduzidos depois de 2012.
+
+### Script completo do banco
+
+Execute dentro do banco reservado à aplicação:
+
+```text
+backend/sql/sqlserver2012_schema.sql
+```
+
+O script cria as tabelas equivalentes às coleções atuais:
+
+`gm_users`, `gm_categories`, `gm_material_catalogs`, `gm_tickets`,
+`gm_login_attempts`, `gm_rate_limits`, `gm_password_reset_tokens`,
+`gm_password_reset_requests`, `gm_audit_logs`, `gm_email_events`,
+`gm_counters` e `gm_system_settings`, além dos índices usados pelo backend.
+
+Como o SQL Server 2012 não possui funções JSON nativas, os documentos são
+armazenados em `NVARCHAR(MAX)` e validados/serializados pela camada Python.
+
+### Criptografia das credenciais SQL
+
+Usuário e senha em texto puro são **recusados por padrão** quando o SQL Server
+é ativado. O projeto usa **AES-256-GCM** com tokens versionados `ENCv1`:
 
 ```env
-DB_ENGINE=sqlserver
-SQLSERVER_SERVER=servidor-ou-ip
-SQLSERVER_PORT=1433
-SQLSERVER_DATABASE=gestao_materiais
-SQLSERVER_USER=usuario
-SQLSERVER_PASSWORD=senha
-SQLSERVER_SCHEMA=dbo
-SQLSERVER_TABLE_PREFIX=gm_
+SQLSERVER_REQUIRE_ENCRYPTED_CREDENTIALS=true
+SQLSERVER_USER_ENCRYPTED=ENCv1:...
+SQLSERVER_PASSWORD_ENCRYPTED=ENCv1:...
+APP_CREDENTIAL_MASTER_KEY_FILE=E:\\CAMINHO_PROTEGIDO\\gestao-materiais.key
 ```
 
-O arquivo `backend/.env.sqlserver.example` contém o modelo completo. As credenciais reais devem ficar em `backend/.env` ou nas variáveis do provedor de hospedagem e nunca devem ser commitadas.
-
-### Virtualenv alternativo
-
-Para manter um ambiente Python separado para testes com SQL Server:
-
-Windows PowerShell:
+A chave mestra deve ficar fora do repositório. No Windows, o projeto inclui um
+utilitário para gerar a chave e aplicar ACL NTFS à conta de serviço:
 
 ```powershell
 cd backend
-.\setup_sqlserver_venv.ps1
-.\.venv-sqlserver\Scripts\Activate.ps1
+.\\tools\\create_credential_master_key.ps1 -ServiceAccount "DOMINIO\\ContaDoServico"
 ```
 
-Linux/macOS:
+Depois gere os tokens com entrada oculta, sem colocar a senha na linha de comando:
 
-```bash
-cd backend
-sh setup_sqlserver_venv.sh
-source .venv-sqlserver/bin/activate
+```powershell
+python .\\tools\\encrypt_sql_credentials.py
 ```
 
-A pasta `.venv-sqlserver` é local e fica ignorada pelo Git.
+Para credenciais separadas do Database Mail, use:
 
-### Tabelas equivalentes
+```powershell
+python .\\tools\\encrypt_sql_credentials.py --dbmail
+```
 
-O adaptador SQL Server cria uma tabela equivalente para cada coleção usada pela aplicação, incluindo:
+### Preflight somente leitura
 
-`gm_users`, `gm_categories`, `gm_material_catalogs`, `gm_tickets`, `gm_login_attempts`, `gm_rate_limits`, `gm_password_reset_tokens`, `gm_password_reset_requests`, `gm_audit_logs`, `gm_email_events`, `gm_counters` e `gm_system_settings`.
+```powershell
+python .\\tools\\check_server_compatibility.py
+```
 
-Para preservar compatibilidade total com os documentos atuais, cada registro é armazenado como JSON válido em `NVARCHAR(MAX)`, mantendo o mesmo `_id` e a mesma estrutura utilizada pelo MongoDB. O script `backend/sql/sqlserver2019_schema.sql` pode ser executado manualmente, embora o backend também consiga criar as tabelas automaticamente.
+Esse utilitário apenas informa as versões detectadas e os Drivers ODBC
+disponíveis. Ele não instala updates nem altera configurações do servidor.
 
-### Migrar MongoDB para SQL Server
+### Migração MongoDB para SQL Server
 
-A migração é segura por padrão e começa em modo de simulação:
+A migração continua em modo de simulação por padrão:
 
 ```bash
 cd backend
 python migrate_mongodb_to_sqlserver.py
-```
-
-Para copiar os dados:
-
-```bash
 python migrate_mongodb_to_sqlserver.py --apply
 ```
 
-Se o banco SQL já tiver dados, o script cancela a operação. Para limpar somente as tabelas da aplicação no destino e recopiá-las:
+O MongoDB não é apagado. A aplicação só passa a usar o SQL quando
+`DB_ENGINE=sqlserver` for definido.
 
-```bash
-python migrate_mongodb_to_sqlserver.py --apply --replace
-```
+### Database Mail opcional
 
-O script preserva o MongoDB, copia os IDs e documentos e compara a quantidade de registros de todas as tabelas ao final. Só depois disso você deve trocar `DB_ENGINE=sqlserver`.
-
-
-## E-mail alternativo: SQL Server Database Mail
-
-Além de Emergent, Brevo e SMTP, o backend está preparado para usar o **Database Mail do SQL Server 2019+** para disparar os mesmos e-mails HTML do portal. Essa opção é independente do banco principal: é possível continuar com `DB_ENGINE=mongodb` e, futuramente, usar um SQL Server somente para o envio de e-mails.
-
-A alternativa fica **desativada por padrão**. Nada muda no envio atual até as duas opções abaixo serem definidas explicitamente:
+O Database Mail continua **desativado por padrão** e é independente do banco
+principal. Para ativá-lo futuramente:
 
 ```env
 EMAIL_PROVIDER=sqlserver_dbmail
 SQLSERVER_DBMAIL_ENABLED=true
-SQLSERVER_DBMAIL_PROFILE=GestaoMateriais
-SQLSERVER_DBMAIL_SERVER=servidor-ou-ip
-SQLSERVER_DBMAIL_PORT=1433
-SQLSERVER_DBMAIL_USER=usuario_dbmail
-SQLSERVER_DBMAIL_PASSWORD=senha
 ```
 
-O SQL Server precisa ter o recurso Database Mail habilitado, um perfil configurado e o usuário da aplicação autorizado no `msdb`. Há um modelo seguro em `backend/sql/sqlserver2019_database_mail.example.sql`.
+As credenciais desse acesso também usam tokens criptografados
+`SQLSERVER_DBMAIL_USER_ENCRYPTED` e
+`SQLSERVER_DBMAIL_PASSWORD_ENCRYPTED`.
 
-Quando ativado, o backend chama `msdb.dbo.sp_send_dbmail` com `@body_format='HTML'`. O SQL Server apenas enfileira/dispara a mensagem; a entrega final ainda depende do servidor SMTP configurado no perfil e das políticas do destinatário (SPF, DKIM, DMARC, filtros corporativos etc.).
+O modelo compatível com SQL Server 2012 está em:
 
-A ativação é separada de `DB_ENGINE` de propósito. Assim, trocar MongoDB por SQL Server **não ativa e-mail pelo SQL automaticamente**, e ativar Database Mail no futuro também não exige trocar o banco da aplicação.
+```text
+backend/sql/sqlserver2012_database_mail.example.sql
+```
 
 
 ## Deploy em produção
